@@ -9,25 +9,11 @@ on:
 jobs:
 
   # ────────────────────────────────────────────
-  # JOB 1 — Tests backend Django
+  # JOB 1 — Tests backend Django (SQLite en mémoire)
   # ────────────────────────────────────────────
   backend-ci:
     name: Backend — Tests Django
     runs-on: ubuntu-latest
-
-    services:
-      mysql:
-        image: mariadb:11
-        env:
-          MARIADB_ROOT_PASSWORD: root
-          MARIADB_DATABASE: sewivoire_test
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping --silent"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
 
     steps:
       - uses: actions/checkout@v4
@@ -45,22 +31,13 @@ jobs:
       - name: Créer le .env de test
         working-directory: SewIvoire/SewIvoire
         run: |
-          cat > .env <<EOF
-          SECRET_KEY=ci-secret-key-not-used-in-production
-          DEBUG=True
-          ALLOWED_HOSTS=localhost,127.0.0.1
-          DB_NAME=sewivoire_test
-          DB_USER=root
-          DB_PASSWORD=root
-          DB_HOST=127.0.0.1
-          DB_PORT=3306
-          EOF
+          printf 'SECRET_KEY=ci-secret-key-not-used-in-production\nDEBUG=True\nALLOWED_HOSTS=localhost,127.0.0.1\n' > .env
 
       - name: Migrations + tests
         working-directory: SewIvoire/SewIvoire
         run: |
-          python manage.py migrate --no-input
-          python manage.py test --verbosity=2
+          python manage.py migrate --no-input --settings=SewIvoire.test_settings
+          python manage.py test --verbosity=2 --settings=SewIvoire.test_settings
 
   # ────────────────────────────────────────────
   # JOB 2 — Build frontend React
