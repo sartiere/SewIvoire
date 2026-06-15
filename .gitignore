@@ -1,0 +1,93 @@
+# ──────────────────────────────────────────────
+# PYTHON / DJANGO
+# ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# Environnements virtuels
+env/
+venv/
+.venv/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Django
+*.log
+debug.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Fichiers statiques collectés (générés par collectstatic)
+staticfiles/
+
+# Médias uploadés (images modèles, etc.)
+media/
+
+# Variables d'environnement — NE JAMAIS versionner
+.env
+.env.*
+!.env.example
+
+# Migrations (à décommenter si tu veux les exclure — déconseillé)
+# */migrations/*.py
+# !*/migrations/__init__.py
+
+# ──────────────────────────────────────────────
+# NODE / REACT / VITE
+# ──────────────────────────────────────────────
+node_modules/
+sewivoire-frontend/dist/
+sewivoire-frontend/.env.local
+sewivoire-frontend/.env.production
+sewivoire-frontend/.env.*.local
+
+# Cache Vite
+sewivoire-frontend/.vite/
+sewivoire-frontend/node_modules/.vite/
+
+# ──────────────────────────────────────────────
+# ÉDITEURS & OS
+# ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# ──────────────────────────────────────────────
+# DIVERS
+# ──────────────────────────────────────────────
+*.bak
+*.tmp
+*.orig
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/

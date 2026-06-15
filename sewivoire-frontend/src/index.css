@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #F5F0E8;
+  color: #1A1A2E;
+}
+/* ✅ AJOUT : Variables CSS globales */
+:root {
+  --color-or: #C8962E;
+  --color-nuit: #1A1A2E;
+  --color-ivoire: #F5F0E8;
+}
+/* ✅ AJOUT : Classes utilitaires manuelles */
+.bg-nuit { background-color: #1A1A2E !important; }
+.bg-or { background-color: #C8962E !important; }
+.bg-ivoire { background-color: #F5F0E8 !important; }
+.text-or { color: #C8962E !important; }
+.text-nuit { color: #1A1A2E !important; }
+.border-or { border-color: #C8962E !important; }
+.ring-or { --tw-ring-color: #C8962E !important; }
+.from-nuit { --tw-gradient-from: #1A1A2E !important; }
+.hover\:bg-or:hover { background-color: #C8962E !important; }
+.hover\:text-nuit:hover { color: #1A1A2E !important; }
+.hover\:text-or:hover { color: #C8962E !important; }
+.hover\:border-or:hover { border-color: #C8962E !important; }
+.focus\:ring-or:focus { --tw-ring-color: #C8962E !important; }
+.border-or { border-color: #C8962E !important; }

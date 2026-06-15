@@ -1,0 +1,31 @@
+# Environnement virtuel
+env/
+venv/
+.venv/
+
+# Variables d'environnement — NE JAMAIS COMMITTER
+.env
+
+# Base de données locale
+*.sqlite3
+*.db
+
+# Logs
+*.log
+debug.log
+
+# Fichiers Python compilés
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Fichiers statiques collectés
+staticfiles/
+
+# Médias uploadés (hors versioning)
+media/
+
+# IDE
+.vscode/
+.idea/
+*.swp

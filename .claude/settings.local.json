@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__visualize__show_widget",
+      "Bash(\"C:\\\\Users\\\\PC MARKET\\\\Desktop\\\\Sew\\\\SewIvoire\\\\env\\\\Scripts\\\\python.exe\" \"C:\\\\Users\\\\PC MARKET\\\\Desktop\\\\Sew\\\\SewIvoire\\\\SewIvoire\\\\manage.py\" makemigrations Sew --name avis_notation)",
+      "PowerShell(& \"C:\\\\Users\\\\PC MARKET\\\\Desktop\\\\Sew\\\\SewIvoire\\\\env\\\\Scripts\\\\pip.exe\" install reportlab -v 2>&1)",
+      "PowerShell(try { $result = & \"C:\\\\Users\\\\PC MARKET\\\\Desktop\\\\Sew\\\\SewIvoire\\\\env\\\\Scripts\\\\pip.exe\" install reportlab 2>&1; $result } catch { $_.Exception.Message })"
+    ]
+  }
+}
