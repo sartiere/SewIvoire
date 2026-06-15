@@ -7,6 +7,7 @@ on:
     branches: [main]
 
 jobs:
+
   # ────────────────────────────────────────────
   # JOB 1 — Tests backend Django
   # ────────────────────────────────────────────
@@ -29,13 +30,11 @@ jobs:
           --health-retries=5
 
     steps:
-      - name: Récupérer le code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configurer Python 3.13
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.12'
           cache: 'pip'
           cache-dependency-path: SewIvoire/SewIvoire/requirements.txt
 
@@ -43,7 +42,7 @@ jobs:
         working-directory: SewIvoire/SewIvoire
         run: pip install -r requirements.txt
 
-      - name: Créer le fichier .env de test
+      - name: Créer le .env de test
         working-directory: SewIvoire/SewIvoire
         run: |
           cat > .env <<EOF
@@ -57,27 +56,23 @@ jobs:
           DB_PORT=3306
           EOF
 
-      - name: Appliquer les migrations
+      - name: Migrations + tests
         working-directory: SewIvoire/SewIvoire
-        run: python manage.py migrate --no-input
-
-      - name: Lancer les tests Django
-        working-directory: SewIvoire/SewIvoire
-        run: python manage.py test --verbosity=2
+        run: |
+          python manage.py migrate --no-input
+          python manage.py test --verbosity=2
 
   # ────────────────────────────────────────────
   # JOB 2 — Build frontend React
   # ────────────────────────────────────────────
-  frontend-ci:
+  frontend-build:
     name: Frontend — Build Vite
     runs-on: ubuntu-latest
 
     steps:
-      - name: Récupérer le code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configurer Node.js 20
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
@@ -93,70 +88,39 @@ jobs:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
         run: npm run build
 
-      - name: Sauvegarder les fichiers buildés
+      - name: Sauvegarder le build
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
           path: sewivoire-frontend/dist/
+          include-hidden-files: true   # inclut .htaccess
           retention-days: 1
 
   # ────────────────────────────────────────────
-  # JOB 3 — Déploiement (uniquement sur push main)
+  # JOB 3 — Pousse sur la branche deploy
+  # (uniquement quand on pousse sur main)
+  # O2Switch surveille cette branche via cron
   # ────────────────────────────────────────────
   deploy:
-    name: Déploiement
+    name: Publier → branche deploy
     runs-on: ubuntu-latest
-    needs: [backend-ci, frontend-ci]
+    needs: [backend-ci, frontend-build]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
-      - name: Récupérer le code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # ── Backend : déploiement SSH sur serveur ──
-      - name: Déployer le backend sur le serveur
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host:     ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key:      ${{ secrets.SSH_PRIVATE_KEY }}
-          port:     ${{ secrets.SSH_PORT }}
-          script: |
-            set -e
-            cd /var/www/sewivoire/SewIvoire/SewIvoire
-
-            echo "── Mise à jour du code ──"
-            git pull origin main
-
-            echo "── Activation de l'environnement virtuel ──"
-            source ../env/bin/activate
-
-            echo "── Installation des dépendances ──"
-            pip install -r requirements.txt --quiet
-
-            echo "── Migrations ──"
-            python manage.py migrate --no-input
-
-            echo "── Fichiers statiques ──"
-            python manage.py collectstatic --no-input --clear
-
-            echo "── Redémarrage Gunicorn ──"
-            sudo systemctl restart gunicorn-sewivoire
-
-            echo "✅ Backend déployé"
-
-      # ── Frontend : déploiement Vercel ──
-      - name: Récupérer les fichiers buildés
+      - name: Récupérer le build frontend
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: sewivoire-frontend/dist/
 
-      - name: Déployer le frontend sur Vercel
-        uses: amondnet/vercel-action@v25
-        with:
-          vercel-token:   ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id:  ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          working-directory: sewivoire-frontend
-          vercel-args: '--prod'
+      - name: Pousser sur la branche deploy
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          # Force-add le dist/ (il est dans .gitignore sur main, mais on l'inclut dans deploy)
+          git add -f sewivoire-frontend/dist/
+          git commit -m "deploy: build $(date -u '+%Y-%m-%d %H:%M UTC')" || echo "Rien à commiter"
+          git push origin HEAD:refs/heads/deploy --force
