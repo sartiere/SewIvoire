@@ -46,7 +46,6 @@ media/
 # NODE / REACT / VITE
 # ──────────────────────────────────────────────
 node_modules/
-sewivoire-frontend/dist/
 sewivoire-frontend/.env.local
 sewivoire-frontend/.env.production
 sewivoire-frontend/.env.*.local
