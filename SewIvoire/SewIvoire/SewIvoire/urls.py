@@ -16,13 +16,15 @@ Including another URLconf
 """
 # SewIvoire/SewIvoire/urls.py
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
 from django.conf import settings
 from django.conf.urls.static import static
+from Sew.views import serve_frontend
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('Sew.urls')),  # Inclusion des URLs de l'app Sew
+    re_path(r'^.*$', serve_frontend, name='frontend'),  # Catch-all pour React Router
 ]
 
 # Servir les médias en développement

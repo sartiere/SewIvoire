@@ -44,6 +44,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',  # Doit être avant CommonMiddleware
     'django.middleware.common.CommonMiddleware',
@@ -120,6 +121,12 @@ STATIC_URL = 'static/'
 _static_src = BASE_DIR / 'static'
 STATICFILES_DIRS = [_static_src] if _static_src.exists() else []
 STATIC_ROOT = BASE_DIR / 'staticfiles'  # créé automatiquement par collectstatic
+
+# Frontend React — build dans sewivoire-frontend/dist/
+# WhiteNoise sert ces fichiers directement à la racine (ex: /assets/xxx.js, /favicon.svg)
+FRONTEND_DIST = BASE_DIR.parent.parent / 'sewivoire-frontend' / 'dist'
+if FRONTEND_DIST.exists():
+    WHITENOISE_ROOT = str(FRONTEND_DIST)
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'

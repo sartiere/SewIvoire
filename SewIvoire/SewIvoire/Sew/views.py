@@ -41,11 +41,14 @@ from .filters import ModeleFilter, MouvementStockFilter
 
 
 # ==============================================
-# VUE D'ACCUEIL
+# VUE D'ACCUEIL / FRONTEND REACT
 # ==============================================
 
-@csrf_exempt
-def home(request):
+def serve_frontend(request, *args, **kwargs):
+    index_path = settings.BASE_DIR.parent.parent / 'sewivoire-frontend' / 'dist' / 'index.html'
+    if index_path.exists():
+        with open(index_path, 'r', encoding='utf-8') as f:
+            return HttpResponse(f.read(), content_type='text/html')
     return JsonResponse({
         'message': "Bienvenue sur l'API SewIvoire",
         'version': '1.0',
@@ -57,6 +60,10 @@ def home(request):
         },
         'status': 'online'
     })
+
+
+def home(request):
+    return serve_frontend(request)
 
 
 # ==============================================
