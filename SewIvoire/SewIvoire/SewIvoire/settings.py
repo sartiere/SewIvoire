@@ -14,6 +14,10 @@ DEBUG = config('DEBUG', default=False, cast=bool)
 
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
 
+# Origines de confiance pour les POST/PUT/DELETE en HTTPS (CSRF).
+# Lu depuis .env : ex. https://sewivoire.olt.ci
+CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='', cast=Csv())
+
 # ==============================================
 # APPLICATIONS INSTALLÉES
 # ==============================================
