@@ -123,9 +123,13 @@ STATICFILES_DIRS = [_static_src] if _static_src.exists() else []
 STATIC_ROOT = BASE_DIR / 'staticfiles'  # créé automatiquement par collectstatic
 
 # Frontend React — build dans sewivoire-frontend/dist/
-# WhiteNoise sert ces fichiers directement à la racine (ex: /assets/xxx.js, /favicon.svg)
-FRONTEND_DIST = BASE_DIR.parent.parent / 'sewivoire-frontend' / 'dist'
-if FRONTEND_DIST.exists():
+# Cherche dans parent (serveur: repo=~/SewIvoire/) puis parent.parent (dev local: working dir=repo root)
+_dist_candidates = [
+    BASE_DIR.parent / 'sewivoire-frontend' / 'dist',
+    BASE_DIR.parent.parent / 'sewivoire-frontend' / 'dist',
+]
+FRONTEND_DIST = next((p for p in _dist_candidates if p.exists()), None)
+if FRONTEND_DIST:
     WHITENOISE_ROOT = str(FRONTEND_DIST)
 
 MEDIA_URL = '/media/'
