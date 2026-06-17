@@ -21,7 +21,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.contrib.auth.hashers import make_password
 from django.core.management.base import BaseCommand
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from Sew.models import (
@@ -211,13 +211,25 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------------------ flush
     def _flush(self):
-        self.stdout.write("Purge des données existantes…")
-        for model in (Avis, Paiement, Livraison, MouvementStock, Devis, Commande,
-                      Mesure, Favoris, Notification, Message, Consomme, Modele,
-                      Materiau, Categorie, Livreur, CodePromo):
-            model.objects.all().delete()
-        # Supprime les utilisateurs non-superuser (garde l'admin)
-        Utilisateur.objects.filter(is_superuser=False).delete()
+        self.stdout.write("Purge des donnees existantes...")
+        models = (Avis, Paiement, Livraison, MouvementStock, Devis, Commande,
+                  Mesure, Favoris, Notification, Message, Consomme, Modele,
+                  Materiau, Categorie, Livreur, CodePromo)
+        if connection.vendor == 'mysql':
+            # SQL direct : ne charge aucun objet via l'ORM, donc évite la
+            # conversion des dates (une ligne existante peut contenir une
+            # date invalide '0000-00-00' que MySQL renvoie comme texte).
+            with connection.cursor() as c:
+                c.execute('SET FOREIGN_KEY_CHECKS=0')
+                for model in models:
+                    c.execute(f'DELETE FROM `{model._meta.db_table}`')
+                # Garde les superusers (admin), supprime le reste
+                c.execute('DELETE FROM `utilisateur` WHERE is_superuser=0')
+                c.execute('SET FOREIGN_KEY_CHECKS=1')
+        else:
+            for model in models:
+                model.objects.all().delete()
+            Utilisateur.objects.filter(is_superuser=False).delete()
 
     # ------------------------------------------------------------- référentiels
     def _parametres(self):
