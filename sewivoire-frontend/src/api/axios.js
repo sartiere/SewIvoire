@@ -1,7 +1,11 @@
 import axios from 'axios'
 
+// En prod, VITE_API_URL n'est pas défini → baseURL '' → URLs relatives (même domaine).
+// En dev local, .env.development fournit http://127.0.0.1:8000
+const API_BASE = import.meta.env.VITE_API_URL || ''
+
 const API = axios.create({
-  baseURL: 'http://127.0.0.1:8000',
+  baseURL: API_BASE,
 })
 
 API.interceptors.request.use((config) => {
@@ -67,7 +71,7 @@ API.interceptors.response.use(
     }
 
     try {
-      const res = await axios.post('http://127.0.0.1:8000/api/token/refresh/', {
+      const res = await axios.post(`${API_BASE}/api/token/refresh/`, {
         refresh: refreshToken,
       })
       const newAccess = res.data.access
