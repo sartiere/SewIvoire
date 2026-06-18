@@ -7,7 +7,10 @@
       "PowerShell(try { $result = & \"C:\\\\Users\\\\PC MARKET\\\\Desktop\\\\Sew\\\\SewIvoire\\\\env\\\\Scripts\\\\pip.exe\" install reportlab 2>&1; $result } catch { $_.Exception.Message })",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(curl -sk http://sewivoireapi.sc1zds18.universe.wf/api/)",
+      "Bash(curl -sk http://sewivoireapi.sc1zds18.universe.wf/api/docs/ -o /dev/null -w \"HTTP %{http_code}\")",
+      "Bash(curl -sk http://sewivoireapi.sc1zds18.universe.wf/admin/ -o /dev/null -w \"HTTP %{http_code}\")"
     ]
   }
 }
