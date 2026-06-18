@@ -164,13 +164,7 @@ class Mesure(models.Model):
         on_delete=models.CASCADE,
         related_name='mesures'
     )
-    mesures = models.JSONField(
-        validators=[valider_mesures],
-        help_text=(
-            "Objet JSON avec au minimum : poitrine, taille, hanches, longueur (en cm). "
-            "Exemple : {\"poitrine\": 90, \"taille\": 70, \"hanches\": 95, \"longueur\": 120}"
-        )
-    )
+    mesures = models.JSONField()
     date_prise = models.DateField(auto_now_add=True)
     notes = models.TextField(blank=True, null=True)
 
