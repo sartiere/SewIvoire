@@ -18,16 +18,17 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include, re_path
 from django.conf import settings
-from django.conf.urls.static import static
+from django.views.static import serve as serve_media
 from Sew.views import serve_frontend
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('Sew.urls')),  # Inclusion des URLs de l'app Sew
-    re_path(r'^.*$', serve_frontend, name='frontend'),  # Catch-all pour React Router
-]
 
-# Servir les médias en développement
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+    # Médias (images des modèles) : servis AVANT le catch-all, sinon celui-ci
+    # les intercepte et renvoie index.html. Fonctionne aussi en production
+    # (ne dépend pas de DEBUG). /static/ et /assets/ sont servis par WhiteNoise.
+    re_path(r'^media/(?P<path>.*)$', serve_media, {'document_root': settings.MEDIA_ROOT}),
+
+    re_path(r'^.*$', serve_frontend, name='frontend'),  # Catch-all pour React Router (DOIT rester en dernier)
+]
