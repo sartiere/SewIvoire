@@ -55,8 +55,12 @@ function Mesures() {
 
   const sauvegarder = async (e) => {
     e.preventDefault(); setSaving(true); setErreur(''); setSucces('')
+    // Les <input number> renvoient des chaînes : on convertit en nombres
+    // (le backend exige des nombres positifs, pas des chaînes).
     const mesuresFiltrees = Object.fromEntries(
-      Object.entries(formData).filter(([_, v]) => v !== '' && v !== null)
+      Object.entries(formData)
+        .map(([k, v]) => [k, v === '' || v === null ? null : Number(v)])
+        .filter(([_, v]) => v !== null && !Number.isNaN(v) && v > 0)
     )
     if (Object.keys(mesuresFiltrees).length === 0) {
       setErreur('Veuillez remplir au moins une mesure.'); setSaving(false); return
@@ -72,8 +76,15 @@ function Mesures() {
         setSucces('Mesures enregistrées avec succès !')
       }
       setAfficherForm(false); setModeEdition(null)
-    } catch {
-      setErreur('Erreur lors de la sauvegarde. Veuillez réessayer.')
+    } catch (err) {
+      // Affiche le message précis renvoyé par le serveur (ex: mesure obligatoire manquante)
+      const data = err.response?.data
+      let msg = 'Erreur lors de la sauvegarde. Veuillez réessayer.'
+      if (data && typeof data === 'object') {
+        const parts = Object.values(data).map(v => Array.isArray(v) ? v.join(' ') : String(v))
+        if (parts.length) msg = parts.join(' ')
+      }
+      setErreur(msg)
     } finally {
       setSaving(false)
     }
@@ -138,6 +149,9 @@ function Mesures() {
                 : <><Plus className="w-5 h-5" /> Nouvelles mesures</>
               }
             </h2>
+            <p className="text-sm text-gray-500 mb-6">
+              Mesures obligatoires : <span className="font-semibold text-nuit">poitrine, taille, hanches, longueur</span>. Les autres sont optionnelles.
+            </p>
             <form onSubmit={sauvegarder}>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
                 {TYPES_MESURES.map(type => (
