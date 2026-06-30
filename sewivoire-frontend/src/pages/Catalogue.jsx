@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Search, SlidersHorizontal, X } from 'lucide-react'
-import API from '../api/axios'
+import API, { fetchAll } from '../api/axios'
 import ModeleCard from '../components/ModeleCard'
 
 function Catalogue() {
@@ -40,12 +40,11 @@ function Catalogue() {
     if (delaiMax)           params.delai_max = delaiMax
     if (tri)                params.ordering  = tri
 
-    API.get('/api/modeles/', { params })
-      .then(res => {
+    fetchAll('/api/modeles/', params)
+      .then(data => {
         if (!actif) return
-        const data = res.data.results || res.data
         setModeles(data)
-        setTotal(res.data.count ?? data.length)
+        setTotal(data.length)
       })
       .catch(err => console.error(err))
       .finally(() => { if (actif) setChargement(false) })

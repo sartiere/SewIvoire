@@ -20,6 +20,7 @@ import MesDevis from './pages/MesDevis'
 import Dashboard from './pages/Dashboard'
 import Profil from './pages/Profil'
 import Mesures from './pages/Mesures'
+import MesLivraisons from './pages/MesLivraisons'
 import NotFound from './pages/NotFound'
 
 function App() {
@@ -50,6 +51,9 @@ function App() {
               } />
               <Route path="/dashboard" element={
                 <PrivateRoute roles={['COUTURIER']}><Dashboard /></PrivateRoute>
+              } />
+              <Route path="/mes-livraisons" element={
+                <PrivateRoute roles={['LIVREUR']}><MesLivraisons /></PrivateRoute>
               } />
               <Route path="/profil" element={
                 <PrivateRoute><Profil /></PrivateRoute>

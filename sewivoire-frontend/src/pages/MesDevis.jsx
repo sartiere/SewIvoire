@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Clock, ClipboardList, CheckCircle, XCircle, AlarmClock } from 'lucide-react'
 import API from '../api/axios'
 import Navigation from '../components/Navigation'
+import ConfirmModal from '../components/ConfirmModal'
 
 const statutConfig = {
   DEMANDE: { label: 'En attente', couleur: 'bg-yellow-100 text-yellow-700', Icon: Clock },
@@ -57,18 +58,19 @@ function Pagination({ page, total, onChanger }) {
 function CarteDevis({ devis, onAccepter, onRefuser, onAnnuler }) {
   const [action, setAction]       = useState(null)
   const [confirmer, setConfirmer] = useState(false)
+  const [confirm, setConfirm]     = useState(null)
   const cfg = statutConfig[devis.statut] || statutConfig.DEMANDE
   const { Icon } = cfg
 
   const handleAccepter = async () => {
     setAction('accepter')
-    try { await onAccepter(devis.id_devis) }
+    try { await onAccepter(devis.id_devis); setConfirm(null) }
     finally { setAction(null) }
   }
 
   const handleRefuser = async () => {
     setAction('refuser')
-    try { await onRefuser(devis.id_devis) }
+    try { await onRefuser(devis.id_devis); setConfirm(null) }
     finally { setAction(null) }
   }
 
@@ -130,14 +132,25 @@ function CarteDevis({ devis, onAccepter, onRefuser, onAnnuler }) {
           )}
           <div className="flex gap-3">
             <button
-              onClick={handleAccepter}
+              onClick={() => setConfirm({
+                titre: 'Accepter et commander ?',
+                message: `Une commande de ${Number(devis.prix_propose).toLocaleString('fr-FR')} FCFA sera créée et envoyée à l'atelier.`,
+                confirmLabel: 'Accepter et commander',
+                onConfirm: handleAccepter,
+              })}
               disabled={action !== null}
               className="flex-1 bg-nuit text-white py-2.5 rounded-xl font-semibold text-sm hover:bg-or hover:text-nuit transition-colors disabled:opacity-50"
             >
               {action === 'accepter' ? 'Traitement…' : 'Accepter et commander'}
             </button>
             <button
-              onClick={handleRefuser}
+              onClick={() => setConfirm({
+                titre: 'Refuser cette proposition ?',
+                message: 'La proposition du couturier sera refusée. Cette action est irréversible.',
+                confirmLabel: 'Refuser',
+                danger: true,
+                onConfirm: handleRefuser,
+              })}
               disabled={action !== null}
               className="flex-1 bg-white border border-gray-200 text-gray-600 py-2.5 rounded-xl font-semibold text-sm hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors disabled:opacity-50"
             >
@@ -195,6 +208,17 @@ function CarteDevis({ devis, onAccepter, onRefuser, onAnnuler }) {
           )}
         </div>
       )}
+
+      <ConfirmModal
+        open={!!confirm}
+        titre={confirm?.titre}
+        message={confirm?.message}
+        confirmLabel={confirm?.confirmLabel}
+        danger={confirm?.danger}
+        loading={action !== null}
+        onConfirm={confirm?.onConfirm}
+        onCancel={() => setConfirm(null)}
+      />
     </div>
   )
 }

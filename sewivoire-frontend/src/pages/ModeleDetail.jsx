@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Shirt, Heart, Layers, CheckCircle, Tag, ShoppingBag, FileText, Send, ClipboardList, MapPin, X } from 'lucide-react'
+import { Shirt, Heart, Layers, CheckCircle, Tag, ShoppingBag, FileText, Send, ClipboardList, MapPin, X, Truck, Store, Scissors, Phone, MessageCircle } from 'lucide-react'
 import API from '../api/axios'
 import { useAuth } from '../context/AuthContext'
 import Navigation from '../components/Navigation'
@@ -19,6 +19,7 @@ function ModeleDetail() {
 
   const [modalAdresse, setModalAdresse] = useState(false)
   const [adresse, setAdresse] = useState('')
+  const [modeLivraison, setModeLivraison] = useState('LIVRAISON')
 
   const [demandeDevis, setDemandeDevis] = useState(false)
   const [notesDevis, setNotesDevis] = useState('')
@@ -78,16 +79,21 @@ function ModeleDetail() {
 
   const ouvrirCommande = () => {
     if (!user) { navigate('/login', { state: { from: `/modeles/${id}` } }); return }
+    setAdresse(user?.adresse || '')   // pré-remplit avec l'adresse du profil
     setModalAdresse(true)
     setErreur('')
   }
 
   const confirmerCommande = async () => {
-    if (!adresse.trim()) { setErreur("Veuillez saisir votre adresse de livraison."); return }
+    if (modeLivraison === 'LIVRAISON' && !adresse.trim()) {
+      setErreur("Veuillez saisir votre adresse de livraison.")
+      return
+    }
     setCommande(true)
     setErreur('')
     try {
-      const body = { modele: id, adresse_livraison: adresse.trim() }
+      const body = { modele: id, mode_livraison: modeLivraison }
+      if (modeLivraison === 'LIVRAISON') body.adresse_livraison = adresse.trim()
       if (promoResultat) body.code_promo_code = promoResultat.code
       await API.post('/api/commandes/', body)
       setModalAdresse(false)
@@ -184,6 +190,24 @@ function ModeleDetail() {
               <h1 className="font-titre text-4xl font-bold text-nuit mb-4">
                 {modele.nom}
               </h1>
+
+              {modele.couturier_nom && (
+                <div className="mb-5 flex flex-wrap items-center gap-2">
+                  <span className="flex items-center gap-1.5 text-gray-600 text-sm">
+                    <Scissors className="w-4 h-4 text-or" /> Par <strong className="text-nuit">{modele.couturier_nom}</strong>
+                  </span>
+                  {modele.couturier_telephone && (
+                    <>
+                      <a href={`tel:${modele.couturier_telephone}`} className="flex items-center gap-1 text-xs bg-nuit/5 hover:bg-nuit/10 text-nuit px-2.5 py-1 rounded-lg transition-colors">
+                        <Phone className="w-3.5 h-3.5" /> {modele.couturier_telephone}
+                      </a>
+                      <a href={`https://wa.me/${modele.couturier_telephone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs bg-green-50 hover:bg-green-100 text-green-700 px-2.5 py-1 rounded-lg transition-colors">
+                        <MessageCircle className="w-3.5 h-3.5" /> WhatsApp
+                      </a>
+                    </>
+                  )}
+                </div>
+              )}
 
               <div className="flex items-center gap-6 mb-8">
                 <div>
@@ -312,6 +336,14 @@ function ModeleDetail() {
                     Voir mes commandes →
                   </Link>
                 </div>
+              ) : user && user.role !== 'CLIENT' ? (
+                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 text-center">
+                  <ShoppingBag className="w-10 h-10 text-blue-400 mx-auto mb-2" />
+                  <p className="text-blue-700 font-semibold">Réservé aux clients</p>
+                  <p className="text-blue-600 text-sm mt-1">
+                    Les comptes couturier et livreur ne passent pas commande.
+                  </p>
+                </div>
               ) : (
                 <>
                   {erreur && (
@@ -394,28 +426,64 @@ function ModeleDetail() {
       </div>
     </div>
 
-    {/* Modal adresse de livraison */}
+    {/* Modal commande : mode de livraison + adresse */}
     {modalAdresse && (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
           <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
             <div className="flex items-center gap-2">
-              <MapPin className="w-5 h-5 text-or" />
-              <p className="font-titre text-lg font-bold text-nuit">Adresse de livraison</p>
+              <ShoppingBag className="w-5 h-5 text-or" />
+              <p className="font-titre text-lg font-bold text-nuit">Finaliser la commande</p>
             </div>
             <button onClick={() => setModalAdresse(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
               <X className="w-5 h-5" />
             </button>
           </div>
           <div className="px-6 py-5 space-y-4">
-            <p className="text-gray-500 text-sm">Où souhaitez-vous être livré ?</p>
-            <textarea
-              value={adresse}
-              onChange={e => setAdresse(e.target.value)}
-              placeholder="Ex : Cocody Riviera 3, en face du carrefour Shell, immeuble bleu, porte 4B — Abidjan"
-              rows={3}
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-or"
-            />
+            {/* Choix du mode */}
+            <div>
+              <p className="text-sm font-semibold text-nuit mb-2">Comment souhaitez-vous récupérer votre commande ?</p>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setModeLivraison('LIVRAISON')}
+                  className={`rounded-xl border-2 p-3 text-left transition-colors ${modeLivraison === 'LIVRAISON' ? 'border-or bg-or/5' : 'border-gray-200 hover:border-gray-300'}`}
+                >
+                  <Truck className={`w-5 h-5 mb-1 ${modeLivraison === 'LIVRAISON' ? 'text-or' : 'text-gray-400'}`} />
+                  <p className="font-semibold text-nuit text-sm">Livraison</p>
+                  <p className="text-gray-400 text-xs">À votre adresse</p>
+                </button>
+                <button
+                  onClick={() => setModeLivraison('RETRAIT')}
+                  className={`rounded-xl border-2 p-3 text-left transition-colors ${modeLivraison === 'RETRAIT' ? 'border-or bg-or/5' : 'border-gray-200 hover:border-gray-300'}`}
+                >
+                  <Store className={`w-5 h-5 mb-1 ${modeLivraison === 'RETRAIT' ? 'text-or' : 'text-gray-400'}`} />
+                  <p className="font-semibold text-nuit text-sm">Retrait</p>
+                  <p className="text-gray-400 text-xs">Vous venez chercher</p>
+                </button>
+              </div>
+            </div>
+
+            {/* Adresse (livraison) ou info (retrait) */}
+            {modeLivraison === 'LIVRAISON' ? (
+              <div>
+                <label className="text-sm font-medium text-nuit mb-1.5 flex items-center gap-1.5">
+                  <MapPin className="w-4 h-4 text-or" /> Adresse de livraison
+                </label>
+                <textarea
+                  value={adresse}
+                  onChange={e => setAdresse(e.target.value)}
+                  placeholder="Ex : Cocody Riviera 3, en face du carrefour Shell, immeuble bleu, porte 4B — Abidjan"
+                  rows={3}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-or"
+                />
+              </div>
+            ) : (
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
+                <p className="text-blue-800 font-medium text-sm">Retrait à l'atelier</p>
+                <p className="text-blue-600 text-xs mt-0.5">Vous (ou votre livreur) viendrez chercher la commande. Le <strong>règlement complet</strong> sera demandé avant le retrait.</p>
+              </div>
+            )}
+
             {erreur && <p className="text-red-500 text-sm">{erreur}</p>}
             <button
               onClick={confirmerCommande}

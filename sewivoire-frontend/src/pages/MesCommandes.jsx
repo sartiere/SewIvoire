@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Clock, CheckCircle, XCircle, Scissors, Package, Star, Ruler, ClipboardList, Shirt, Trash2, CreditCard, Smartphone, Banknote, Loader2, X, MapPin, Truck } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
+import { Clock, CheckCircle, XCircle, Scissors, Package, Star, Ruler, ClipboardList, Shirt, Trash2, CreditCard, Smartphone, Banknote, Loader2, X, MapPin, Truck, Store, Archive, AlertTriangle } from 'lucide-react'
 import API from '../api/axios'
 import Navigation from '../components/Navigation'
 
@@ -211,8 +212,9 @@ function ModalPaiement({ commande, onFermer, onPaiementOk }) {
       if (carte.cvv.length < 3)                         { setErreur('CVV invalide.'); return }
     }
     setErreur('')
+    const estEspeces = methode.id === 'ESPECES'
     setEtape('traitement')
-    await new Promise(r => setTimeout(r, 2500))
+    await new Promise(r => setTimeout(r, estEspeces ? 700 : 2500))
     try {
       const type      = mode === 'total' ? 'TOTAL' : deja === 0 ? 'ACOMPTE' : 'SOLDE'
       const reference = genRef()
@@ -225,7 +227,8 @@ function ModalPaiement({ commande, onFermer, onPaiementOk }) {
       })
       setRef(reference)
       setEtape('succes')
-      onPaiementOk(commande.id_commande, montant)
+      // Espèces : le paiement reste « en attente » → on ne décompte pas tant que l'atelier n'a pas confirmé
+      if (!estEspeces) onPaiementOk(commande.id_commande, montant)
     } catch (err) {
       setErreur(err.response?.data?.montant?.[0] || 'Une erreur est survenue.')
       setEtape('details')
@@ -430,7 +433,7 @@ function ModalPaiement({ commande, onFermer, onPaiementOk }) {
               {/* Espèces */}
               {methode?.id === 'ESPECES' && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
-                  Vous pouvez régler en espèces directement à notre boutique. Ce paiement sera enregistré à titre de confirmation.
+                  Réglez en espèces à la boutique ou à la livraison. Votre paiement sera enregistré, puis confirmé par l'atelier une fois l'argent reçu.
                 </div>
               )}
 
@@ -457,17 +460,29 @@ function ModalPaiement({ commande, onFermer, onPaiementOk }) {
           {/* ── Étape 5 : Succès ── */}
           {etape === 'succes' && (
             <div className="py-8 text-center">
-              <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-5">
-                <CheckCircle className="w-10 h-10 text-green-500" />
+              <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-5 ${methode?.id === 'ESPECES' ? 'bg-amber-100' : 'bg-green-100'}`}>
+                {methode?.id === 'ESPECES'
+                  ? <Clock className="w-10 h-10 text-amber-500" />
+                  : <CheckCircle className="w-10 h-10 text-green-500" />}
               </div>
-              <h3 className="font-titre text-2xl font-bold text-nuit mb-2">Paiement confirmé !</h3>
-              <p className="text-gray-400 text-sm mb-1">
-                {Number(montant).toLocaleString('fr-FR')} FCFA reçus via {methode?.label}{sous ? ` (${sous})` : ''}
-              </p>
-              {mode === 'avance' && (
-                <p className="text-amber-600 text-sm font-medium mb-4">
-                  Reste à payer à la livraison : {(reste - Number(montant)).toLocaleString('fr-FR')} FCFA
+              <h3 className="font-titre text-2xl font-bold text-nuit mb-2">
+                {methode?.id === 'ESPECES' ? 'Paiement déclaré' : 'Paiement confirmé !'}
+              </h3>
+              {methode?.id === 'ESPECES' ? (
+                <p className="text-gray-500 text-sm mb-4 px-2">
+                  {Number(montant).toLocaleString('fr-FR')} FCFA en espèces — <strong className="text-amber-700">en attente de confirmation</strong> par l'atelier. Le montant sera décompté une fois l'argent reçu.
                 </p>
+              ) : (
+                <>
+                  <p className="text-gray-400 text-sm mb-1">
+                    {Number(montant).toLocaleString('fr-FR')} FCFA reçus via {methode?.label}{sous ? ` (${sous})` : ''}
+                  </p>
+                  {mode === 'avance' && (
+                    <p className="text-amber-600 text-sm font-medium mb-4">
+                      Reste à payer : {(reste - Number(montant)).toLocaleString('fr-FR')} FCFA
+                    </p>
+                  )}
+                </>
               )}
               <div className="bg-gray-50 rounded-xl px-5 py-3 mb-6 text-sm">
                 <p className="text-gray-400 text-xs mb-0.5">Référence de transaction</p>
@@ -487,11 +502,55 @@ function ModalPaiement({ commande, onFermer, onPaiementOk }) {
   )
 }
 
-function CarteCommande({ commande, avis, confirmerAnnulation, annulationEnCours, onDemanderAnnulation, onAnnuler, onAnnulerRetour, onSupprimer, onPayer, onAvisSoumis }) {
+function CarteCommande({ commande, avis, confirmerAnnulation, annulationEnCours, onDemanderAnnulation, onAnnuler, onAnnulerRetour, onSupprimer, onPayer, onAvisSoumis, onModeChange, onArchiver, onRecours }) {
+  const { user }  = useAuth()
   const config   = statutConfig[commande.statut] || statutConfig.EN_ATTENTE
   const prixFinal = Number(commande.modele_prix) - Number(commande.remise_appliquee || 0)
   const reste     = prixFinal - Number(commande.total_paye)
-  const peutPayer = ['CONFIRMEE', 'EN_COURS'].includes(commande.statut) && reste > 0
+  const peutPayer = ['CONFIRMEE', 'EN_COURS', 'LIVREE'].includes(commande.statut) && reste > 0
+
+  // Changement de mode (Livraison <-> Retrait), possible tant que la commande est En attente
+  const [modalMode, setModalMode]           = useState(false)
+  const [nouveauMode, setNouveauMode]       = useState(commande.mode_livraison || 'LIVRAISON')
+  const [adresseMode, setAdresseMode]       = useState('')
+  const [chargementMode, setChargementMode] = useState(false)
+  const [erreurMode, setErreurMode]         = useState('')
+
+  const confirmerChangementMode = async () => {
+    if (nouveauMode === 'LIVRAISON' && !adresseMode.trim()) {
+      setErreurMode("Veuillez saisir l'adresse de livraison.")
+      return
+    }
+    setChargementMode(true)
+    setErreurMode('')
+    try {
+      await onModeChange(commande.id_commande, nouveauMode, adresseMode.trim())
+      setModalMode(false)
+    } catch (err) {
+      setErreurMode(err?.response?.data?.error || "Erreur lors du changement de mode.")
+    } finally {
+      setChargementMode(false)
+    }
+  }
+
+  // Recours (réclamation sur commande livrée, valable 72h)
+  const [modalRecours, setModalRecours]           = useState(false)
+  const [motifRecours, setMotifRecours]           = useState('')
+  const [chargementRecours, setChargementRecours] = useState(false)
+  const [erreurRecours, setErreurRecours]         = useState('')
+
+  const envoyerRecours = async () => {
+    if (!motifRecours.trim()) { setErreurRecours('Décrivez ce qui ne correspond pas.'); return }
+    setChargementRecours(true); setErreurRecours('')
+    try {
+      await onRecours(commande.id_commande, motifRecours.trim())
+      setModalRecours(false); setMotifRecours('')
+    } catch (err) {
+      setErreurRecours(err?.response?.data?.error || "Erreur lors de l'envoi du recours.")
+    } finally {
+      setChargementRecours(false)
+    }
+  }
 
   return (
     <div className="bg-white rounded-2xl shadow-sm p-6 hover:shadow-md transition-shadow">
@@ -512,8 +571,22 @@ function CarteCommande({ commande, avis, confirmerAnnulation, annulationEnCours,
                 day: 'numeric', month: 'long', year: 'numeric',
               })}
             </p>
-            <p className="text-or font-semibold mt-1">
-              {Number(commande.total_paye).toLocaleString('fr-FR')} FCFA payés
+            <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+              <span>
+                <span className="text-nuit font-semibold">{Number(commande.total_paye).toLocaleString('fr-FR')}</span>
+                <span className="text-gray-400"> / {prixFinal.toLocaleString('fr-FR')} FCFA</span>
+              </span>
+              {commande.statut !== 'ANNULEE' && (
+                reste > 0 ? (
+                  <span className="bg-orange-100 text-orange-700 text-xs font-semibold px-2 py-0.5 rounded-full">
+                    Reste {reste.toLocaleString('fr-FR')} FCFA
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">
+                    <CheckCircle className="w-3 h-3" /> Soldé
+                  </span>
+                )
+              )}
             </p>
             {commande.couturier_nom && (
               <p className="flex items-center gap-1 text-gray-400 text-xs mt-0.5">
@@ -528,10 +601,40 @@ function CarteCommande({ commande, avis, confirmerAnnulation, annulationEnCours,
           <span className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold ${config.couleur}`}>
             <config.Icon className="w-3.5 h-3.5" /> {config.label}
           </span>
+          {commande.mode_livraison === 'RETRAIT' ? (
+            <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700">
+              <Store className="w-3 h-3" /> Retrait sur place
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
+              <Truck className="w-3 h-3" /> Livraison
+            </span>
+          )}
+          {commande.statut === 'EN_ATTENTE' && (
+            <button
+              onClick={() => {
+                setNouveauMode(commande.mode_livraison || 'LIVRAISON')
+                setAdresseMode(commande.livraison_adresse || user?.adresse || '')
+                setErreurMode('')
+                setModalMode(true)
+              }}
+              className="text-xs text-or hover:underline"
+            >
+              Changer le mode
+            </button>
+          )}
           {commande.modele_id && (
             <Link to={`/modeles/${commande.modele_id}`} className="text-or text-sm hover:underline">
               Voir le modèle →
             </Link>
+          )}
+          {['LIVREE', 'ANNULEE'].includes(commande.statut) && (
+            <button
+              onClick={() => onArchiver(commande.id_commande, !commande.archivee_client)}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 hover:underline"
+            >
+              <Archive className="w-3 h-3" /> {commande.archivee_client ? 'Désarchiver' : 'Archiver'}
+            </button>
           )}
         </div>
       </div>
@@ -596,17 +699,29 @@ function CarteCommande({ commande, avis, confirmerAnnulation, annulationEnCours,
 
       {/* Bouton payer */}
       {peutPayer && (
-        <div className="mt-4 flex items-center justify-between bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
-          <div>
-            <p className="text-sm font-semibold text-nuit">Reste à payer</p>
-            <p className="text-or font-bold text-lg">{reste.toLocaleString('fr-FR')} FCFA</p>
+        <div className="mt-4 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-nuit">Reste à payer</p>
+              <p className="text-or font-bold text-lg">{reste.toLocaleString('fr-FR')} FCFA</p>
+            </div>
+            <button
+              onClick={() => onPayer(commande)}
+              className="bg-nuit text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-or hover:text-nuit transition-colors flex items-center gap-2"
+            >
+              <CreditCard className="w-4 h-4" /> Payer
+            </button>
           </div>
-          <button
-            onClick={() => onPayer(commande)}
-            className="bg-nuit text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-or hover:text-nuit transition-colors flex items-center gap-2"
-          >
-            <CreditCard className="w-4 h-4" /> Payer
-          </button>
+          <p className="text-xs text-blue-600 mt-2 flex items-center gap-1">
+            <Clock className="w-3 h-3 flex-shrink-0" />
+            {commande.statut === 'LIVREE'
+              ? (commande.mode_livraison === 'RETRAIT'
+                  ? 'Commande retirée — pensez à régler le solde.'
+                  : 'Commande livrée — pensez à régler le solde.')
+              : (commande.mode_livraison === 'RETRAIT'
+                  ? 'À régler avant de venir retirer votre commande.'
+                  : 'À régler au plus tard au moment de la livraison.')}
+          </p>
         </div>
       )}
 
@@ -657,11 +772,123 @@ function CarteCommande({ commande, avis, confirmerAnnulation, annulationEnCours,
         )
       )}
 
+      {/* Recours (commande livrée — valable 72h) */}
+      {commande.statut === 'LIVREE' && (
+        commande.recours ? (
+          <div className={`mt-4 rounded-xl p-4 border ${
+            commande.recours.statut === 'ACCEPTE' ? 'bg-green-50 border-green-200'
+            : commande.recours.statut === 'REFUSE' ? 'bg-red-50 border-red-200'
+            : 'bg-amber-50 border-amber-200'}`}>
+            <p className="text-sm font-semibold text-nuit flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4" /> Recours — {
+                commande.recours.statut === 'ACCEPTE' ? 'Accepté par le couturier'
+                : commande.recours.statut === 'REFUSE' ? 'Refusé par le couturier'
+                : 'En attente de réponse'}
+            </p>
+            <p className="text-gray-600 text-sm mt-1"><span className="text-gray-400">Votre motif : </span>{commande.recours.motif}</p>
+            {commande.recours.reponse_couturier && (
+              <p className="text-gray-600 text-sm mt-1"><span className="text-gray-400">Réponse : </span>{commande.recours.reponse_couturier}</p>
+            )}
+          </div>
+        ) : commande.recours_possible ? (
+          <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-amber-800">La tenue ne correspond pas au modèle ? Vous avez <strong>72h</strong> pour faire un recours.</p>
+            <button onClick={() => { setMotifRecours(''); setErreurRecours(''); setModalRecours(true) }} className="flex-shrink-0 bg-amber-700 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:bg-amber-800 transition-colors">
+              Faire un recours
+            </button>
+          </div>
+        ) : (
+          <p className="mt-4 text-xs text-gray-400 flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5" /> Délai de recours (72h) dépassé.
+          </p>
+        )
+      )}
+
+      {/* Modal : faire un recours */}
+      {modalRecours && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !chargementRecours && setModalRecours(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
+              <p className="font-titre text-lg font-bold text-nuit">Faire un recours</p>
+              <button onClick={() => setModalRecours(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <p className="text-gray-500 text-sm">Décrivez en quoi la tenue reçue ne correspond pas au modèle commandé. Le couturier sera notifié.</p>
+              <textarea value={motifRecours} onChange={e => setMotifRecours(e.target.value)} rows={4} placeholder="Ex : la couleur n'est pas la bonne, les finitions sont mal faites…" className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-or" />
+              {erreurRecours && <p className="text-red-500 text-sm">{erreurRecours}</p>}
+              <button onClick={envoyerRecours} disabled={chargementRecours} className="w-full bg-amber-700 text-white py-3 rounded-xl font-bold hover:bg-amber-800 transition-colors disabled:opacity-50">
+                {chargementRecours ? 'Envoi…' : 'Envoyer le recours'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Avis */}
       {commande.statut === 'LIVREE' && (
         avis
           ? <AvisExistant avis={avis} />
           : <FormulaireAvis commandeId={commande.id_commande} onAvisSoumis={onAvisSoumis} />
+      )}
+
+      {/* Modal : changer le mode de livraison (tant que En attente) */}
+      {modalMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !chargementMode && setModalMode(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
+              <p className="font-titre text-lg font-bold text-nuit">Changer le mode de récupération</p>
+              <button onClick={() => setModalMode(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setNouveauMode('LIVRAISON')}
+                  className={`rounded-xl border-2 p-3 text-left transition-colors ${nouveauMode === 'LIVRAISON' ? 'border-or bg-or/5' : 'border-gray-200 hover:border-gray-300'}`}
+                >
+                  <Truck className={`w-5 h-5 mb-1 ${nouveauMode === 'LIVRAISON' ? 'text-or' : 'text-gray-400'}`} />
+                  <p className="font-semibold text-nuit text-sm">Livraison</p>
+                  <p className="text-gray-400 text-xs">À votre adresse</p>
+                </button>
+                <button
+                  onClick={() => setNouveauMode('RETRAIT')}
+                  className={`rounded-xl border-2 p-3 text-left transition-colors ${nouveauMode === 'RETRAIT' ? 'border-or bg-or/5' : 'border-gray-200 hover:border-gray-300'}`}
+                >
+                  <Store className={`w-5 h-5 mb-1 ${nouveauMode === 'RETRAIT' ? 'text-or' : 'text-gray-400'}`} />
+                  <p className="font-semibold text-nuit text-sm">Retrait</p>
+                  <p className="text-gray-400 text-xs">Vous venez chercher</p>
+                </button>
+              </div>
+
+              {nouveauMode === 'LIVRAISON' ? (
+                <div>
+                  <label className="text-sm font-medium text-nuit mb-1.5 flex items-center gap-1.5">
+                    <MapPin className="w-4 h-4 text-or" /> Adresse de livraison
+                  </label>
+                  <textarea
+                    value={adresseMode}
+                    onChange={e => setAdresseMode(e.target.value)}
+                    rows={3}
+                    placeholder="Ex : Cocody Riviera 3, immeuble bleu, porte 4B — Abidjan"
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-or"
+                  />
+                </div>
+              ) : (
+                <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 text-sm text-blue-700">
+                  Vous viendrez chercher la commande à l'atelier. Le règlement complet sera demandé avant le retrait.
+                </div>
+              )}
+
+              {erreurMode && <p className="text-red-500 text-sm">{erreurMode}</p>}
+              <button
+                onClick={confirmerChangementMode}
+                disabled={chargementMode}
+                className="w-full bg-nuit text-white py-3 rounded-xl font-bold hover:bg-or hover:text-nuit transition-colors disabled:opacity-50"
+              >
+                {chargementMode ? 'Enregistrement…' : 'Enregistrer'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -677,6 +904,7 @@ function MesCommandes() {
   const [annulationEnCours, setAnnulationEnCours]     = useState(false)
   const [pageCourante, setPageCourante]               = useState(1)
   const [commandePaiement, setCommandePaiement]       = useState(null)
+  const [voirArchivees, setVoirArchivees]             = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -697,11 +925,11 @@ function MesCommandes() {
 
   useEffect(() => {
     setPageCourante(1)
-  }, [filtreStatut])
+  }, [filtreStatut, voirArchivees])
 
-  const commandesFiltrees = filtreStatut === 'tous'
-    ? commandes
-    : commandes.filter(c => c.statut === filtreStatut)
+  const commandesFiltrees = voirArchivees
+    ? commandes.filter(c => c.archivee_client)
+    : commandes.filter(c => !c.archivee_client && (filtreStatut === 'tous' || c.statut === filtreStatut))
 
   const totalPages    = Math.ceil(commandesFiltrees.length / PAR_PAGE)
   const commandesPage = commandesFiltrees.slice((pageCourante - 1) * PAR_PAGE, pageCourante * PAR_PAGE)
@@ -744,6 +972,31 @@ function MesCommandes() {
     }
   }
 
+  const handleModeChange = async (id, mode, adresse) => {
+    const body = mode === 'LIVRAISON'
+      ? { mode_livraison: mode, adresse_livraison: adresse }
+      : { mode_livraison: mode }
+    await API.post(`/api/commandes/${id}/changer_mode_livraison/`, body)
+    // Rechargement pour refléter le nouveau mode + la livraison créée/supprimée
+    const res = await API.get('/api/commandes/mes_commandes/')
+    setCommandes(res.data.results || res.data)
+  }
+
+  const handleArchiver = async (id, archivee) => {
+    try {
+      await API.post(`/api/commandes/${id}/archiver/`, { archivee })
+      setCommandes(prev => prev.map(c => c.id_commande === id ? { ...c, archivee_client: archivee } : c))
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const handleRecours = async (id, motif) => {
+    await API.post(`/api/commandes/${id}/faire_recours/`, { motif })
+    const res = await API.get('/api/commandes/mes_commandes/')
+    setCommandes(res.data.results || res.data)
+  }
+
   return (
     <>
     <div className="min-h-screen bg-ivoire">
@@ -777,28 +1030,38 @@ function MesCommandes() {
         {/* Filtres */}
         <div className="flex flex-wrap gap-2 mb-8">
           <button
-            onClick={() => setFiltreStatut('tous')}
+            onClick={() => { setFiltreStatut('tous'); setVoirArchivees(false) }}
             className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
-              filtreStatut === 'tous' ? 'bg-nuit text-white' : 'bg-white text-gray-600 border border-gray-200'
+              filtreStatut === 'tous' && !voirArchivees ? 'bg-nuit text-white' : 'bg-white text-gray-600 border border-gray-200'
             }`}
           >
-            Toutes ({commandes.length})
+            Toutes ({commandes.filter(c => !c.archivee_client).length})
           </button>
           {Object.entries(statutConfig).map(([key, val]) => {
-            const count = commandes.filter(c => c.statut === key).length
+            const count = commandes.filter(c => !c.archivee_client && c.statut === key).length
             if (count === 0) return null
             return (
               <button
                 key={key}
-                onClick={() => setFiltreStatut(key)}
+                onClick={() => { setFiltreStatut(key); setVoirArchivees(false) }}
                 className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-colors ${
-                  filtreStatut === key ? 'bg-nuit text-white' : 'bg-white text-gray-600 border border-gray-200'
+                  filtreStatut === key && !voirArchivees ? 'bg-nuit text-white' : 'bg-white text-gray-600 border border-gray-200'
                 }`}
               >
                 <val.Icon className="w-3.5 h-3.5" /> {val.label} ({count})
               </button>
             )
           })}
+          {commandes.some(c => c.archivee_client) && (
+            <button
+              onClick={() => setVoirArchivees(true)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                voirArchivees ? 'bg-nuit text-white' : 'bg-white text-gray-600 border border-gray-200'
+              }`}
+            >
+              <Archive className="w-3.5 h-3.5" /> Archivées ({commandes.filter(c => c.archivee_client).length})
+            </button>
+          )}
         </div>
 
         {/* Liste */}
@@ -833,6 +1096,9 @@ function MesCommandes() {
                   onSupprimer={handleSupprimer}
                   onPayer={setCommandePaiement}
                   onAvisSoumis={handleAvisSoumis}
+                  onModeChange={handleModeChange}
+                  onArchiver={handleArchiver}
+                  onRecours={handleRecours}
                 />
               ))}
             </div>

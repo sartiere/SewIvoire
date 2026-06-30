@@ -13,7 +13,8 @@ from rest_framework import viewsets, mixins, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from decimal import Decimal
+from rest_framework.exceptions import PermissionDenied
+from decimal import Decimal, InvalidOperation
 from django.db.models import Sum, Q, F, Value, DecimalField, Count
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
@@ -23,7 +24,7 @@ from .models import (
     Utilisateur, Categorie, Modele, Materiau, Commande,
     Mesure, Livraison, Livreur, Paiement, Notification,
     Message, Favoris, Consomme, MouvementStock, Avis, CodePromo, Devis,
-    ParametreAtelier,
+    ParametreAtelier, Recours,
 )
 from .serializers import (
     UtilisateurSerializer, CategorieSerializer, ModeleListSerializer,
@@ -156,9 +157,26 @@ class CategorieViewSet(viewsets.ModelViewSet):
 # 3. MODELE
 # ==============================================
 
+class IsAtelierOrReadOnly(permissions.BasePermission):
+    """Lecture publique du catalogue ; création / modification réservée au couturier/admin.
+    De plus, un couturier ne peut modifier que SES propres objets (modèle / matériau)."""
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return bool(request.user and request.user.is_authenticated and is_admin_or_couturier(request.user))
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        if request.user.is_staff:
+            return True
+        proprietaire = getattr(obj, 'couturier', None)
+        return proprietaire is None or proprietaire == request.user
+
+
 class ModeleViewSet(viewsets.ModelViewSet):
     queryset = Modele.objects.select_related('categorie').all()
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAtelierOrReadOnly]
     filterset_class = ModeleFilter
     search_fields   = ['nom', 'categorie__libelle']
     ordering_fields = ['prix', 'nom', 'delai']
@@ -168,6 +186,18 @@ class ModeleViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return ModeleListSerializer
         return ModeleDetailSerializer
+
+    def perform_create(self, serializer):
+        # Le couturier qui publie devient propriétaire du modèle
+        couturier = self.request.user if getattr(self.request.user, 'role', None) == 'COUTURIER' else None
+        serializer.save(couturier=couturier)
+
+    @action(detail=False, methods=['get'])
+    def mes_modeles(self, request):
+        """Les modèles publiés par le couturier connecté."""
+        qs = self.get_queryset().filter(couturier=request.user)
+        serializer = ModeleListSerializer(qs, many=True, context={'request': request})
+        return Response(serializer.data)
 
     @action(detail=True, methods=['get'])
     def materiaux(self, request, pk=None):
@@ -197,7 +227,61 @@ class ModeleViewSet(viewsets.ModelViewSet):
 class MateriauViewSet(viewsets.ModelViewSet):
     queryset = Materiau.objects.all()
     serializer_class = MateriauSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]  # ✅ SÉCURISÉ
+    permission_classes = [IsAtelierOrReadOnly]  # écriture réservée couturier/admin
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return Materiau.objects.all()
+        if getattr(user, 'role', None) == 'COUTURIER':
+            return Materiau.objects.filter(couturier=user)
+        return Materiau.objects.none()
+
+    def perform_create(self, serializer):
+        couturier = self.request.user if getattr(self.request.user, 'role', None) == 'COUTURIER' else None
+        serializer.save(couturier=couturier)
+
+    @action(detail=True, methods=['post'])
+    def mouvement(self, request, pk=None):
+        """
+        Enregistre un mouvement de stock ET met à jour la quantité du matériau.
+        ENTREE : +quantite | SORTIE : -quantite | AJUSTEMENT : fixe le stock à quantite.
+        """
+        if not is_admin_or_couturier(request.user):
+            raise PermissionDenied("Réservé à l'atelier.")
+        materiau = self.get_object()
+        type_mvt = request.data.get('type_mouvement')
+        if type_mvt not in ('ENTREE', 'SORTIE', 'AJUSTEMENT'):
+            return Response({'error': "Type invalide (ENTREE, SORTIE ou AJUSTEMENT)."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            quantite = Decimal(str(request.data.get('quantite')))
+        except (TypeError, InvalidOperation):
+            return Response({'error': "Quantité invalide."}, status=status.HTTP_400_BAD_REQUEST)
+        if quantite <= 0:
+            return Response({'error': "La quantité doit être positive."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            if type_mvt == 'ENTREE':
+                materiau.quantite_stock += quantite
+            elif type_mvt == 'SORTIE':
+                if materiau.quantite_stock < quantite:
+                    return Response(
+                        {'error': f"Stock insuffisant (disponible : {materiau.quantite_stock})."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                materiau.quantite_stock -= quantite
+            else:  # AJUSTEMENT : nouvelle valeur absolue
+                materiau.quantite_stock = quantite
+            materiau.save(update_fields=['quantite_stock'])
+            MouvementStock.objects.create(
+                materiau=materiau,
+                type_mouvement=type_mvt,
+                quantite=quantite,
+                reference=(request.data.get('reference') or None),
+                notes=(request.data.get('notes') or None),
+            )
+        return Response({'status': 'ok', 'quantite_stock': str(materiau.quantite_stock)})
 
     @action(detail=False, methods=['get'])
     def alertes_stock(self, request):
@@ -307,7 +391,7 @@ class CommandeViewSet(viewsets.ModelViewSet):
             .prefetch_related('paiements')
             .annotate(
                 total_paye_sql=Coalesce(
-                    Sum('paiements__montant'),
+                    Sum('paiements__montant', filter=Q(paiements__statut='CONFIRME')),
                     Value(Decimal('0')),
                     output_field=DecimalField(max_digits=10, decimal_places=2)
                 )
@@ -328,7 +412,19 @@ class CommandeViewSet(viewsets.ModelViewSet):
         return CommandeDetailSerializer
 
     def perform_create(self, serializer):
-        serializer.save(utilisateur=self.request.user)
+        # Seuls les clients passent commande (couturiers/livreurs font partie de l'atelier)
+        if self.request.user.role != 'CLIENT':
+            raise PermissionDenied("Seuls les clients peuvent passer une commande.")
+        commande = serializer.save(utilisateur=self.request.user)
+        # Prévenir le couturier propriétaire du modèle (la commande lui est destinée)
+        client = self.request.user
+        nom_client = f"{client.first_name} {client.last_name}".strip() or client.username
+        if commande.couturier:
+            Notification.objects.create(
+                utilisateur=commande.couturier,
+                message=f"Nouvelle commande #{commande.id_commande} — {commande.modele.nom} — de {nom_client}",
+                type_message='STATUT',
+            )
 
     def destroy(self, request, *args, **kwargs):
         """Un client ne peut supprimer que ses commandes ANNULEE."""
@@ -343,9 +439,163 @@ class CommandeViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
     @action(detail=True, methods=['post'])
+    def changer_mode_livraison(self, request, pk=None):
+        """
+        Le client peut changer Livraison <-> Retrait tant que la commande est
+        encore « En attente » (rien n'est engagé : ni livreur, ni production).
+        """
+        commande = self.get_object()
+
+        # Seul le propriétaire de la commande (ou l'atelier) peut modifier
+        if commande.utilisateur != request.user and not is_admin_or_couturier(request.user):
+            raise PermissionDenied("Vous ne pouvez pas modifier cette commande.")
+
+        # Uniquement tant que la commande n'est pas engagée
+        if commande.statut != 'EN_ATTENTE':
+            return Response(
+                {'error': "Le mode ne peut être changé que tant que la commande est « En attente »."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        nouveau_mode = request.data.get('mode_livraison')
+        if nouveau_mode not in ('LIVRAISON', 'RETRAIT'):
+            return Response(
+                {'error': "Mode invalide (attendu : LIVRAISON ou RETRAIT)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        with transaction.atomic():
+            if nouveau_mode == 'LIVRAISON':
+                adresse = (request.data.get('adresse_livraison') or '').strip()
+                if not adresse:
+                    return Response(
+                        {'error': "L'adresse de livraison est requise."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                livraison = Livraison.objects.filter(commande=commande).first()
+                if livraison:
+                    livraison.adresse_client = adresse
+                    livraison.save(update_fields=['adresse_client'])
+                else:
+                    Livraison.objects.create(commande=commande, adresse_client=adresse)
+            else:  # RETRAIT : on retire la livraison éventuelle et on libère le livreur
+                for liv in Livraison.objects.filter(commande=commande):
+                    if liv.livreur:
+                        liv.livreur.est_disponible = True
+                        liv.livreur.save(update_fields=['est_disponible'])
+                    liv.delete()
+
+            commande.mode_livraison = nouveau_mode
+            commande.save(update_fields=['mode_livraison'])
+
+        return Response({'status': 'Mode de livraison mis à jour', 'mode_livraison': nouveau_mode})
+
+    @action(detail=True, methods=['post'])
+    def archiver(self, request, pk=None):
+        """
+        Le client archive (masque) une commande terminée de son espace.
+        La commande reste en base et visible par l'atelier. Réversible via {'archivee': false}.
+        """
+        commande = self.get_object()
+        if commande.utilisateur != request.user and not is_admin_or_couturier(request.user):
+            raise PermissionDenied("Vous ne pouvez pas modifier cette commande.")
+        if commande.statut not in ('LIVREE', 'ANNULEE'):
+            return Response(
+                {'error': "Seules les commandes livrées ou annulées peuvent être archivées."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        commande.archivee_client = bool(request.data.get('archivee', True))
+        commande.save(update_fields=['archivee_client'])
+        return Response({'status': 'ok', 'archivee_client': commande.archivee_client})
+
+    @action(detail=True, methods=['post'])
+    def faire_recours(self, request, pk=None):
+        """Le client conteste une commande livrée (ne correspond pas au modèle). Valable 72h."""
+        from datetime import timedelta
+        commande = self.get_object()
+        if commande.utilisateur != request.user:
+            raise PermissionDenied("Vous ne pouvez faire un recours que sur vos propres commandes.")
+        if commande.statut != 'LIVREE':
+            return Response({'error': "Un recours n'est possible que sur une commande livrée."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if not commande.date_livraison or (timezone.now() - commande.date_livraison) > timedelta(hours=72):
+            return Response({'error': "Le délai de recours de 72h est dépassé."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if Recours.objects.filter(commande=commande).exists():
+            return Response({'error': "Un recours a déjà été déposé pour cette commande."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        motif = (request.data.get('motif') or '').strip()
+        if not motif:
+            return Response({'error': "Veuillez décrire ce qui ne correspond pas."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        recours = Recours.objects.create(commande=commande, motif=motif)
+        if commande.couturier:
+            Notification.objects.create(
+                utilisateur=commande.couturier,
+                message=f"Recours sur la commande #{commande.id_commande} ({commande.modele.nom}) — à traiter.",
+                type_message='ALERTE',
+            )
+        return Response({'status': 'Recours enregistré', 'id_recours': recours.id_recours})
+
+    @action(detail=True, methods=['post'])
+    def repondre_recours(self, request, pk=None):
+        """Le couturier propriétaire traite le recours : ACCEPTE ou REFUSE (+ réponse)."""
+        commande = self.get_object()
+        if not is_admin_or_couturier(request.user):
+            raise PermissionDenied("Réservé à l'atelier.")
+        if not request.user.is_staff and commande.couturier != request.user:
+            raise PermissionDenied("Cette commande n'est pas la vôtre.")
+        if not hasattr(commande, 'recours'):
+            return Response({'error': "Aucun recours pour cette commande."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        decision = request.data.get('decision')
+        if decision not in ('ACCEPTE', 'REFUSE'):
+            return Response({'error': "Décision invalide (ACCEPTE ou REFUSE)."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        recours = commande.recours
+        recours.statut = decision
+        recours.reponse_couturier = (request.data.get('reponse') or '').strip() or None
+        recours.date_reponse = timezone.now()
+        recours.save()
+        Notification.objects.create(
+            utilisateur=commande.utilisateur,
+            message=f"Votre recours sur la commande #{commande.id_commande} a été {'accepté' if decision == 'ACCEPTE' else 'refusé'}.",
+            type_message='STATUT',
+        )
+        return Response({'status': 'Recours traité', 'statut': recours.statut})
+
+    @action(detail=True, methods=['get'])
+    def recette(self, request, pk=None):
+        """Matériaux du modèle (quantité conseillée) + stock actuel du couturier.
+        Sert à pré-remplir la saisie de consommation à la confirmation.
+        Réservé à l'atelier — donnée privée au couturier."""
+        commande = self.get_object()
+        if not is_admin_or_couturier(request.user):
+            raise PermissionDenied("Réservé à l'atelier.")
+        consommations = Consomme.objects.filter(
+            modele=commande.modele
+        ).select_related('materiau')
+        materiaux = [{
+            'materiau': c.materiau.id_materiau,
+            'nom': c.materiau.nom_materiau,
+            'unite': c.materiau.get_unite_display(),
+            'quantite_conseillee': str(c.quantite_necessaire),
+            'stock_actuel': str(c.materiau.quantite_stock),
+        } for c in consommations]
+        return Response({
+            'deja_deduit': commande.mouvements_stock.filter(type_mouvement='SORTIE').exists(),
+            'materiaux': materiaux,
+        })
+
+    @action(detail=True, methods=['post'])
     def changer_statut(self, request, pk=None):
         """Change le statut d'une commande"""
         commande = self.get_object()
+        # Le couturier qui traite une commande non assignée se l'attribue automatiquement
+        if (getattr(request.user, 'role', None) == 'COUTURIER'
+                and not request.user.is_staff and commande.couturier is None):
+            commande.couturier = request.user
+            commande.save(update_fields=['couturier'])
         nouveau_statut = request.data.get('statut')
         statuts_valides = dict(Commande._meta.get_field('statut').choices)
 
@@ -386,46 +636,60 @@ class CommandeViewSet(viewsets.ModelViewSet):
                 )
 
         with transaction.atomic():
-            # Déduction de stock uniquement au premier passage en EN_COURS
-            if nouveau_statut == 'EN_COURS' and commande.statut != 'EN_COURS':
-                consommations = Consomme.objects.filter(
-                    modele=commande.modele
-                ).select_related('materiau')
+            # Déduction du stock à la CONFIRMATION : le couturier saisit les quantités
+            # réellement consommées (elles varient selon la taille / les mesures du client).
+            # On ne déduit qu'au premier passage en CONFIRMEE et si rien n'a encore été
+            # sorti pour cette commande (évite tout double décompte).
+            if (nouveau_statut == 'CONFIRMEE'
+                    and commande.statut != 'CONFIRMEE'
+                    and not commande.mouvements_stock.filter(type_mouvement='SORTIE').exists()):
+                lignes = []
+                for item in (request.data.get('consommations') or []):
+                    try:
+                        mat = Materiau.objects.get(pk=item.get('materiau'))
+                        qte = Decimal(str(item.get('quantite')))
+                    except (Materiau.DoesNotExist, TypeError, ValueError, InvalidOperation):
+                        continue
+                    if qte <= 0:
+                        continue
+                    # Sécurité : le matériau doit appartenir au couturier de la commande
+                    if (commande.couturier_id and mat.couturier_id
+                            and mat.couturier_id != commande.couturier_id):
+                        continue
+                    lignes.append((mat, qte))
 
                 # Vérifier les stocks avant de déduire
-                insuffisants = [
-                    c for c in consommations
-                    if c.materiau.quantite_stock < c.quantite_necessaire
-                ]
+                insuffisants = [(m, q) for m, q in lignes if m.quantite_stock < q]
                 if insuffisants:
                     detail = ', '.join(
-                        f"{c.materiau.nom_materiau} "
-                        f"(disponible : {c.materiau.quantite_stock}, requis : {c.quantite_necessaire})"
-                        for c in insuffisants
+                        f"{m.nom_materiau} (disponible : {m.quantite_stock}, demandé : {q})"
+                        for m, q in insuffisants
                     )
                     return Response(
-                        {'error': f"Stock insuffisant pour lancer la confection : {detail}"},
+                        {'error': f"Stock insuffisant : {detail}"},
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
-                # Décrémenter le stock et enregistrer le mouvement pour audit
-                for c in consommations:
-                    c.materiau.quantite_stock -= c.quantite_necessaire
-                    c.materiau.save(update_fields=['quantite_stock'])
+                # Décrémenter le stock et tracer le mouvement (audit, privé au couturier)
+                for m, q in lignes:
+                    m.quantite_stock -= q
+                    m.save(update_fields=['quantite_stock'])
                     MouvementStock.objects.create(
-                        materiau=c.materiau,
+                        materiau=m,
                         type_mouvement='SORTIE',
-                        quantite=c.quantite_necessaire,
+                        quantite=q,
                         commande=commande,
-                        notes=f"Sortie automatique — commande #{commande.id_commande}",
+                        notes=f"Consommation — commande #{commande.id_commande}",
                     )
 
             commande.statut = nouveau_statut
+            if nouveau_statut == 'LIVREE' and commande.date_livraison is None:
+                commande.date_livraison = timezone.now()
             commande.save()
 
             Notification.objects.create(
                 utilisateur=commande.utilisateur,
-                message=f"Votre commande #{commande.id_commande} est maintenant '{commande.get_statut_display()}'",
+                message=f"Votre commande #{commande.id_commande} — {commande.modele.nom} — est maintenant « {commande.get_statut_display()} »",
                 type_message='STATUT'
             )
 
@@ -448,7 +712,7 @@ class CommandeViewSet(viewsets.ModelViewSet):
         commande.save()
         Notification.objects.create(
             utilisateur=commande.utilisateur,
-            message=f"Votre commande #{commande.id_commande} a été annulée.",
+            message=f"Votre commande #{commande.id_commande} — {commande.modele.nom} — a été annulée.",
             type_message='STATUT'
         )
         return Response({'statut': 'ANNULEE'})
@@ -510,7 +774,12 @@ class CommandeViewSet(viewsets.ModelViewSet):
         if not is_admin_or_couturier(request.user):
             return Response({'error': 'Accès non autorisé'}, status=status.HTTP_403_FORBIDDEN)
 
-        commandes = self.get_queryset().filter(statut__in=['CONFIRMEE', 'EN_COURS'])
+        # En attente/Confirmée/En cours + les commandes livrées avec un recours ouvert (à traiter)
+        commandes = self.get_queryset().filter(
+            Q(statut__in=['EN_ATTENTE', 'CONFIRMEE', 'EN_COURS'])
+            | Q(statut='LIVREE', recours__statut='OUVERT')
+        ).distinct()
+        commandes = self._scoper_couturier(commandes)
         serializer = CommandeListSerializer(commandes, many=True, context={'request': request})
         return Response(serializer.data)
 
@@ -520,7 +789,7 @@ class CommandeViewSet(viewsets.ModelViewSet):
         if not is_admin_or_couturier(request.user):
             return Response({'error': 'Accès non autorisé'}, status=status.HTTP_403_FORBIDDEN)
 
-        qs = self.get_queryset()
+        qs = self._scoper_couturier(self.get_queryset())
         return Response({
             'total_commandes': qs.count(),
             'en_attente': qs.filter(statut='EN_ATTENTE').count(),
@@ -624,8 +893,20 @@ class CommandeViewSet(viewsets.ModelViewSet):
             'par_statut':        par_statut,
         })
 
+    def _scoper_couturier(self, qs, inclure_non_assignees=True):
+        """Scoping strict : un couturier (non-admin) ne voit que SES commandes.
+        Les commandes non assignées restent visibles dans la liste (à prendre),
+        mais PAS dans les exports (rapport strictement personnel)."""
+        user = self.request.user
+        if getattr(user, 'role', None) == 'COUTURIER' and not user.is_staff:
+            if inclure_non_assignees:
+                return qs.filter(Q(couturier=user) | Q(couturier__isnull=True))
+            return qs.filter(couturier=user)
+        return qs
+
     def _commandes_qs_export(self, request):
         qs = self.get_queryset().select_related('utilisateur', 'modele', 'couturier', 'code_promo')
+        qs = self._scoper_couturier(qs, inclure_non_assignees=False)
         if d := request.query_params.get('date_debut'):
             qs = qs.filter(date_commande__date__gte=d)
         if d := request.query_params.get('date_fin'):
@@ -756,6 +1037,19 @@ class LivraisonViewSet(viewsets.ModelViewSet):
     serializer_class = LivraisonSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_queryset(self):
+        qs = Livraison.objects.select_related(
+            'commande', 'commande__utilisateur', 'commande__modele', 'livreur'
+        ).prefetch_related('commande__paiements')
+        user = self.request.user
+        if is_admin_or_couturier(user):
+            return qs
+        if user.role == 'LIVREUR':
+            # Le livreur ne voit que les livraisons qui lui sont assignées
+            return qs.filter(livreur__utilisateur=user)
+        # Client : livraisons de ses propres commandes
+        return qs.filter(commande__utilisateur=user)
+
     @action(detail=True, methods=['post'])
     def assigner_livreur(self, request, pk=None):
         """Assigne un livreur disponible à une livraison"""
@@ -800,12 +1094,14 @@ class LivraisonViewSet(viewsets.ModelViewSet):
                     livraison.livreur.save()
 
                 livraison.commande.statut = 'LIVREE'
+                if livraison.commande.date_livraison is None:
+                    livraison.commande.date_livraison = timezone.now()
                 livraison.commande.save()
 
                 # Notifier le client
                 Notification.objects.create(
                     utilisateur=livraison.commande.utilisateur,
-                    message=f"Votre commande #{livraison.commande.id_commande} a été livrée !",
+                    message=f"Votre commande #{livraison.commande.id_commande} — {livraison.commande.modele.nom} — a été livrée !",
                     type_message='STATUT'
                 )
 
@@ -845,9 +1141,38 @@ class PaiementViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = Paiement.objects.select_related('commande__utilisateur', 'commande__modele').all()
-        if not is_admin_or_couturier(self.request.user):
-            qs = qs.filter(commande__utilisateur=self.request.user)
-        return qs
+        user = self.request.user
+        if user.is_staff:
+            return qs
+        if getattr(user, 'role', None) == 'COUTURIER':
+            # Un couturier ne voit que les paiements de SES commandes
+            return qs.filter(commande__couturier=user)
+        return qs.filter(commande__utilisateur=user)
+
+    def perform_create(self, serializer):
+        # Espèces → en attente de confirmation par l'atelier ; autres méthodes → confirmé d'office.
+        methode = serializer.validated_data.get('methode')
+        statut = 'EN_ATTENTE' if methode == 'ESPECES' else 'CONFIRME'
+        serializer.save(statut=statut)
+
+    @action(detail=True, methods=['post'])
+    def confirmer(self, request, pk=None):
+        """Le couturier confirme la réception d'un paiement en espèces."""
+        paiement = self.get_object()
+        if not is_admin_or_couturier(request.user):
+            raise PermissionDenied("Réservé à l'atelier.")
+        if not request.user.is_staff and paiement.commande.couturier != request.user:
+            raise PermissionDenied("Ce paiement ne concerne pas vos commandes.")
+        if paiement.statut == 'CONFIRME':
+            return Response({'error': "Ce paiement est déjà confirmé."}, status=status.HTTP_400_BAD_REQUEST)
+        paiement.statut = 'CONFIRME'
+        paiement.save(update_fields=['statut'])
+        Notification.objects.create(
+            utilisateur=paiement.commande.utilisateur,
+            message=f"Votre paiement de {paiement.montant} FCFA (commande #{paiement.commande.id_commande}) a été confirmé par l'atelier.",
+            type_message='STATUT',
+        )
+        return Response({'status': 'Paiement confirmé', 'statut': 'CONFIRME'})
 
     @action(detail=False, methods=['get'])
     def par_commande(self, request):
@@ -1078,10 +1403,15 @@ class MouvementStockViewSet(
     ordering = ['-date']
 
     def get_queryset(self):
-        if not is_admin_or_couturier(self.request.user):
+        user = self.request.user
+        if not is_admin_or_couturier(user):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Accès réservé aux couturiers et administrateurs.")
-        return MouvementStock.objects.select_related('materiau', 'commande').all()
+        qs = MouvementStock.objects.select_related('materiau', 'commande').all()
+        if getattr(user, 'role', None) == 'COUTURIER' and not user.is_staff:
+            # Mouvements des matériaux du couturier connecté
+            return qs.filter(materiau__couturier=user)
+        return qs
 
 
 # ==============================================
@@ -1098,9 +1428,13 @@ class DevisViewSet(
 
     def get_queryset(self):
         qs = Devis.objects.select_related('modele', 'client', 'commande', 'mesures')
-        if is_admin_or_couturier(self.request.user):
+        user = self.request.user
+        if user.is_staff:
             return qs
-        return qs.filter(client=self.request.user)
+        if getattr(user, 'role', None) == 'COUTURIER':
+            # Un couturier ne voit que les devis de SES modèles
+            return qs.filter(modele__couturier=user)
+        return qs.filter(client=user)
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -1109,6 +1443,12 @@ class DevisViewSet(
             return DevisListSerializer
         return DevisDetailSerializer
 
+    def perform_create(self, serializer):
+        # Réservé aux clients (couturiers/livreurs ne demandent pas de devis)
+        if self.request.user.role != 'CLIENT':
+            raise PermissionDenied("Seuls les clients peuvent demander un devis.")
+        serializer.save()
+
     @action(detail=True, methods=['post'])
     def proposer(self, request, pk=None):
         """Couturier propose un prix et un délai (DEMANDE → PROPOSE)."""
@@ -1116,9 +1456,10 @@ class DevisViewSet(
             return Response({'error': 'Accès non autorisé.'}, status=status.HTTP_403_FORBIDDEN)
 
         devis = self.get_object()
-        if devis.statut != 'DEMANDE':
+        # DEMANDE → première proposition ; PROPOSE → modification tant que le client n'a pas répondu
+        if devis.statut not in ('DEMANDE', 'PROPOSE'):
             return Response(
-                {'error': f"Impossible de proposer sur un devis en statut '{devis.get_statut_display()}'."},
+                {'error': f"Impossible de (re)proposer sur un devis en statut '{devis.get_statut_display()}'."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -1182,15 +1523,25 @@ class DevisViewSet(
 
     @action(detail=True, methods=['post'])
     def refuser(self, request, pk=None):
-        """Client refuse le devis (PROPOSE → REFUSE)."""
+        """Refus d'un devis :
+        - le couturier peut refuser une DEMANDE (il décline de la traiter) ;
+        - le client peut refuser une PROPOSE (il décline le prix proposé).
+        """
         devis = self.get_object()
-        if devis.client != request.user:
+        if is_admin_or_couturier(request.user):
+            if devis.statut != 'DEMANDE':
+                return Response(
+                    {'error': f"Un couturier ne peut refuser qu'une demande (statut actuel : '{devis.get_statut_display()}')."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        elif devis.client == request.user:
+            if devis.statut != 'PROPOSE':
+                return Response(
+                    {'error': f"Ce devis est en statut '{devis.get_statut_display()}' et ne peut pas être refusé."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
             return Response({'error': 'Accès non autorisé.'}, status=status.HTTP_403_FORBIDDEN)
-        if devis.statut != 'PROPOSE':
-            return Response(
-                {'error': f"Ce devis est en statut '{devis.get_statut_display()}' et ne peut pas être refusé."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
 
         devis.statut = 'REFUSE'
         devis.save()

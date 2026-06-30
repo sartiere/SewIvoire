@@ -179,12 +179,12 @@ class Command(BaseCommand):
 
             self._parametres()
             cats = self._categories()
-            materiaux = self._materiaux()
-            modeles = self._modeles(cats, materiaux)
             clients = self._users(opt["clients"], "CLIENT", "client")
             couturiers = self._users(opt["couturiers"], "COUTURIER", "couturier")
             livreur_users = self._users(opt["livreurs"], "LIVREUR", "livreur")
             livreurs = self._livreurs(livreur_users)
+            materiaux = self._materiaux(couturiers)               # chaque couturier a son propre stock
+            modeles = self._modeles(cats, materiaux, couturiers)  # chaque modèle appartient à un couturier
             promos = self._promos()
             mesures = self._mesures(clients)
             commandes = self._commandes(opt["commandes"], clients, couturiers, modeles, mesures, promos)
@@ -243,28 +243,34 @@ class Command(BaseCommand):
             cats[lib], _ = Categorie.objects.get_or_create(libelle=lib)
         return cats
 
-    def _materiaux(self):
-        objs = []
-        for nom, unite, stock, seuil in MATERIAUX:
-            m, _ = Materiau.objects.get_or_create(
-                nom_materiau=nom,
-                defaults=dict(unite=unite, quantite_stock=deux_dec(stock),
-                              seuil_alerte=deux_dec(seuil)),
-            )
-            objs.append(m)
-        return objs
+    def _materiaux(self, couturiers):
+        """Chaque couturier possède son propre stock de matériaux."""
+        par_couturier = {}
+        for cout in couturiers:
+            objs = []
+            for nom, unite, stock, seuil in MATERIAUX:
+                m = Materiau.objects.create(
+                    couturier=cout, nom_materiau=nom, unite=unite,
+                    quantite_stock=deux_dec(stock), seuil_alerte=deux_dec(seuil),
+                )
+                objs.append(m)
+            par_couturier[cout.pk] = objs
+        return par_couturier
 
-    def _modeles(self, cats, materiaux):
+    def _modeles(self, cats, materiaux, couturiers):
+        """Chaque modèle est publié par un couturier ; sa recette utilise les matériaux de CE couturier."""
         modeles = []
-        for nom, cat, pmin, pmax, dmin, dmax in MODELES:
+        for i, (nom, cat, pmin, pmax, dmin, dmax) in enumerate(MODELES):
+            cout = couturiers[i % len(couturiers)]   # répartition tournante entre couturiers
+            mats_cout = materiaux[cout.pk]
             prix = deux_dec(random.randrange(pmin, pmax, 500))
             m = Modele.objects.create(
-                nom=nom, prix=prix,
+                couturier=cout, nom=nom, prix=prix,
                 delai=random.randint(dmin, dmax),
                 categorie=cats[cat],
             )
-            # 2 à 4 matériaux consommés par modèle
-            for mat in random.sample(materiaux, random.randint(2, 4)):
+            # 2 à 4 matériaux DU COUTURIER consommés par modèle
+            for mat in random.sample(mats_cout, random.randint(2, min(4, len(mats_cout)))):
                 qte = deux_dec(random.uniform(0.5, 6))
                 Consomme.objects.get_or_create(
                     modele=m, materiau=mat,
@@ -369,8 +375,8 @@ class Command(BaseCommand):
             client = random.choice(clients)
             modele = random.choice(modeles)
             statut = random.choice(statuts)
-            couturier = random.choice(couturiers) if statut in (
-                "CONFIRMEE", "EN_COURS", "LIVREE") else None
+            # La commande est destinée au couturier qui a publié le modèle
+            couturier = modele.couturier
             mes = mesures_par_client.get(client.id)
             mesure = random.choice(mes) if mes else None
 
@@ -392,6 +398,9 @@ class Command(BaseCommand):
             date_cmd = self._jours(*age)
             self._set_date(cmd, date_commande=date_cmd)
             cmd._date_commande = date_cmd  # mémorisé pour les étapes suivantes
+            if statut == 'LIVREE':
+                cmd.date_livraison = date_cmd + timedelta(days=cmd.modele.delai)
+                cmd.save(update_fields=['date_livraison'])
             commandes.append(cmd)
 
             if code_promo:
@@ -473,7 +482,7 @@ class Command(BaseCommand):
                 Favoris.objects.get_or_create(utilisateur=client, modele=modele)
 
     def _notifications(self, users):
-        gabarits = [
+        gabarits_client = [
             ("STATUT", "Votre commande #{n} est passée en confirmation."),
             ("STATUT", "Bonne nouvelle : votre commande #{n} est en cours de confection."),
             ("STATUT", "Votre commande #{n} a été livrée. Merci de votre confiance !"),
@@ -482,7 +491,14 @@ class Command(BaseCommand):
             ("ALERTE", "Pensez à régler le solde de votre commande."),
             ("INFO", "Bienvenue chez SewIvoire, votre atelier de couture en ligne."),
         ]
+        gabarits_atelier = [
+            ("STATUT", "Nouvelle commande #{n} reçue — à confirmer."),
+            ("STATUT", "Nouvelle demande de devis à traiter."),
+            ("ALERTE", "Stock faible sur un matériau — pensez à réapprovisionner."),
+            ("INFO", "Un client a laissé un avis sur une commande livrée."),
+        ]
         for user in users:
+            gabarits = gabarits_atelier if getattr(user, 'role', 'CLIENT') == 'COUTURIER' else gabarits_client
             for _ in range(random.randint(1, 5)):
                 type_m, txt = random.choice(gabarits)
                 n = Notification.objects.create(
@@ -508,8 +524,10 @@ class Command(BaseCommand):
             self._set_date(m, date_envoi=self._jours(0, 90))
 
     def _mouvements(self, materiaux, commandes):
+        # materiaux est un dict {couturier_pk: [matériaux]} -> on aplatit
+        tous_mats = [m for lst in materiaux.values() for m in lst]
         # Entrées de réapprovisionnement
-        for mat in materiaux:
+        for mat in tous_mats:
             for _ in range(random.randint(1, 3)):
                 mv = MouvementStock.objects.create(
                     materiau=mat, type_mouvement="ENTREE",
@@ -531,7 +549,7 @@ class Command(BaseCommand):
                 )
                 self._set_date(mv, date=base_date + timedelta(days=random.randint(1, 5)))
         # Quelques ajustements d'inventaire
-        for mat in random.sample(materiaux, 5):
+        for mat in random.sample(tous_mats, 5):
             mv = MouvementStock.objects.create(
                 materiau=mat, type_mouvement="AJUSTEMENT",
                 quantite=mat.quantite_stock,
@@ -570,7 +588,7 @@ class Command(BaseCommand):
                 commande_liee = Commande.objects.create(
                     statut="CONFIRMEE", utilisateur=client, modele=modele,
                     mesures_utilisees=mesure,
-                    couturier=random.choice(couturiers),
+                    couturier=modele.couturier,
                     remise_appliquee=Decimal("0"),
                 )
                 self._set_date(commande_liee, date_commande=self._jours(5, 60))

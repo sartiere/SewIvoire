@@ -92,4 +92,19 @@ API.interceptors.response.use(
   }
 )
 
+// Récupère TOUTES les pages d'un endpoint paginé (DRF PageNumberPagination).
+// Renvoie un tableau complet. Garde-fou de 50 pages.
+export async function fetchAll(url, params = {}) {
+  const out = []
+  let page = 1
+  for (let i = 0; i < 50; i++) {
+    const { data } = await API.get(url, { params: { ...params, page } })
+    if (Array.isArray(data)) { out.push(...data); break }
+    out.push(...(data.results || []))
+    if (!data.next) break
+    page++
+  }
+  return out
+}
+
 export default API

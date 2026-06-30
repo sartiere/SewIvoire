@@ -19,6 +19,7 @@ function Profil() {
     last_name: user?.last_name || '',
     email: user?.email || '',
     telephone: user?.telephone || '',
+    adresse: user?.adresse || '',
   })
 
   const [formPassword, setFormPassword] = useState({
@@ -111,7 +112,10 @@ function Profil() {
   const tabs = [
     { key: 'infos',    label: 'Mes informations', Icon: User },
     { key: 'password', label: 'Mot de passe',     Icon: Lock },
-    { key: 'favoris',  label: `Favoris (${favoris.length})`, Icon: Heart },
+    // Les favoris ne concernent que les clients
+    ...(user?.role === 'CLIENT'
+      ? [{ key: 'favoris', label: `Favoris (${favoris.length})`, Icon: Heart }]
+      : []),
   ]
 
   return (
@@ -142,7 +146,7 @@ function Profil() {
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
-        {stats && (
+        {stats && user?.role === 'CLIENT' && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
             {statItems.map((s, i) => (
               <div key={i} className="bg-white rounded-2xl p-4 text-center shadow-sm">
@@ -232,9 +236,23 @@ function Profil() {
                   className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-or"
                 />
               </div>
+              {user?.role === 'CLIENT' && (
+                <div>
+                  <label className="block text-sm font-medium text-nuit mb-1.5">Adresse de livraison</label>
+                  <textarea
+                    name="adresse"
+                    value={formInfos.adresse}
+                    onChange={handleInfosChange}
+                    placeholder="Ex : Cocody Riviera 3, en face du carrefour Shell, immeuble bleu — Abidjan"
+                    rows={2}
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-or"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Elle sera pré-remplie automatiquement quand vous passez commande.</p>
+                </div>
+              )}
               <div className="flex justify-between items-center pt-2">
-                <Link to="/mes-commandes" className="text-or text-sm hover:underline">
-                  Voir mes commandes →
+                <Link to={user?.role === 'COUTURIER' ? '/dashboard' : '/mes-commandes'} className="text-or text-sm hover:underline">
+                  {user?.role === 'COUTURIER' ? 'Voir les commandes' : 'Voir mes commandes'} →
                 </Link>
                 <button
                   type="submit"

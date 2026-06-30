@@ -3,7 +3,7 @@ from .models import (
     Utilisateur, Categorie, Modele, Materiau, Commande,
     Mesure, Livraison, Livreur, Paiement, Notification,
     Message, Consomme, Favoris, MouvementStock, Avis, CodePromo, Devis,
-    ParametreAtelier,
+    ParametreAtelier, Recours,
 )
 from django.db import transaction
 
@@ -38,7 +38,7 @@ class UtilisateurSerializer(serializers.ModelSerializer):
         model = Utilisateur
         fields = [
             'id', 'username', 'first_name', 'last_name', 'email',
-            'telephone', 'role', 'password'
+            'telephone', 'adresse', 'role', 'password'
         ]
         extra_kwargs = {
             'password': {'write_only': True}
@@ -88,10 +88,17 @@ class ConsommeSerializer(serializers.ModelSerializer):
 
 class ModeleListSerializer(serializers.ModelSerializer):
     categorie_nom = serializers.CharField(source='categorie.libelle', read_only=True)
+    couturier_nom = serializers.SerializerMethodField()
+    couturier_telephone = serializers.CharField(source='couturier.telephone', read_only=True)
 
     class Meta:
         model = Modele
-        fields = ['id_modele', 'nom', 'prix', 'delai', 'categorie_nom', 'image']
+        fields = ['id_modele', 'nom', 'prix', 'delai', 'categorie_nom', 'image',
+                  'couturier_nom', 'couturier_telephone']
+
+    def get_couturier_nom(self, obj):
+        c = obj.couturier
+        return (f"{c.first_name} {c.last_name}".strip() or c.username) if c else None
 
 
 class ModeleDetailSerializer(serializers.ModelSerializer):
@@ -104,13 +111,20 @@ class ModeleDetailSerializer(serializers.ModelSerializer):
     # ✅ CORRIGÉ : source='consomme_set' est correct car Consomme a une FK vers Modele
     materiaux = ConsommeSerializer(source='consomme_set', many=True, read_only=True)
     image = serializers.ImageField(required=False, allow_null=True)
+    couturier_nom = serializers.SerializerMethodField()
+    couturier_telephone = serializers.CharField(source='couturier.telephone', read_only=True)
 
     class Meta:
         model = Modele
         fields = [
             'id_modele', 'nom', 'prix', 'delai', 'image',
-            'categorie', 'id_categorie', 'materiaux'
+            'categorie', 'id_categorie', 'materiaux',
+            'couturier_nom', 'couturier_telephone',
         ]
+
+    def get_couturier_nom(self, obj):
+        c = obj.couturier
+        return (f"{c.first_name} {c.last_name}".strip() or c.username) if c else None
 
 
 class MesureSerializer(serializers.ModelSerializer):
@@ -141,10 +155,10 @@ class PaiementSerializer(serializers.ModelSerializer):
     class Meta:
         model = Paiement
         fields = [
-            'id_paiement', 'montant', 'type', 'methode', 'date',
+            'id_paiement', 'montant', 'type', 'methode', 'statut', 'date',
             'commande', 'commande_ref', 'client_nom', 'reference',
         ]
-        read_only_fields = ['date']
+        read_only_fields = ['date', 'statut']
 
     def get_client_nom(self, obj):
         u = obj.commande.utilisateur
@@ -153,6 +167,15 @@ class PaiementSerializer(serializers.ModelSerializer):
     def validate(self, data):
         commande = data.get('commande') or (self.instance and self.instance.commande)
         montant = data.get('montant')
+
+        # Un paiement n'est possible qu'une fois la commande confirmée par l'atelier
+        if commande and commande.statut not in ('CONFIRMEE', 'EN_COURS', 'LIVREE'):
+            raise serializers.ValidationError({
+                'commande': (
+                    f"Paiement impossible : la commande est « {commande.get_statut_display()} ». "
+                    "Elle doit d'abord être confirmée par l'atelier."
+                )
+            })
 
         if commande and montant is not None:
             # Pour un update, exclure le paiement courant du calcul
@@ -174,16 +197,37 @@ class PaiementSerializer(serializers.ModelSerializer):
 
 
 class LivraisonSerializer(serializers.ModelSerializer):
-    livreur_nom = serializers.CharField(source='livreur.nom_livreur', read_only=True)
-    commande_ref = serializers.IntegerField(source='commande.id_commande', read_only=True)
+    livreur_nom   = serializers.CharField(source='livreur.nom_livreur', read_only=True)
+    commande_ref  = serializers.IntegerField(source='commande.id_commande', read_only=True)
+    client_nom    = serializers.SerializerMethodField()
+    modele_nom    = serializers.CharField(source='commande.modele.nom', read_only=True)
+    client_telephone = serializers.CharField(source='commande.utilisateur.telephone', read_only=True)
+    montant_total = serializers.SerializerMethodField()
+    total_paye    = serializers.SerializerMethodField()
+    reste_a_payer = serializers.SerializerMethodField()
 
     class Meta:
         model = Livraison
         fields = [
             'id_livraison', 'adresse_client', 'date_livraison',
             'status_livraison', 'commande', 'livreur',
-            'livreur_nom', 'commande_ref'
+            'livreur_nom', 'commande_ref', 'client_nom', 'client_telephone', 'modele_nom',
+            'montant_total', 'total_paye', 'reste_a_payer',
         ]
+
+    def get_client_nom(self, obj):
+        u = obj.commande.utilisateur
+        return f"{u.first_name} {u.last_name}".strip() or u.username
+
+    def get_montant_total(self, obj):
+        return obj.commande.modele.prix - obj.commande.remise_appliquee
+
+    def get_total_paye(self, obj):
+        return obj.commande.total_paye
+
+    def get_reste_a_payer(self, obj):
+        total = obj.commande.modele.prix - obj.commande.remise_appliquee
+        return max(0, total - obj.commande.total_paye)
 
 
 # ==============================================
@@ -206,14 +250,17 @@ class CommandeListSerializer(serializers.ModelSerializer):
     livraison_adresse = serializers.SerializerMethodField()
     livraison_livreur = serializers.SerializerMethodField()
     livraison_date    = serializers.SerializerMethodField()
+    recours           = serializers.SerializerMethodField()
+    recours_possible  = serializers.SerializerMethodField()
 
     class Meta:
         model = Commande
         fields = [
-            'id_commande', 'statut', 'date_commande',
+            'id_commande', 'statut', 'date_commande', 'mode_livraison', 'archivee_client',
             'client', 'modele_id', 'modele_nom', 'modele_prix', 'modele_image', 'total_paye', 'couturier_nom',
             'remise_appliquee', 'code_promo_code',
             'livraison_id', 'livraison_statut', 'livraison_adresse', 'livraison_livreur', 'livraison_date',
+            'date_livraison', 'recours', 'recours_possible',
         ]
 
     def get_modele_image(self, obj):
@@ -228,6 +275,26 @@ class CommandeListSerializer(serializers.ModelSerializer):
 
     def get_client(self, obj):
         return f"{obj.utilisateur.first_name} {obj.utilisateur.last_name}"
+
+    def get_recours(self, obj):
+        if not hasattr(obj, 'recours'):
+            return None
+        r = obj.recours
+        return {
+            'statut': r.statut,
+            'motif': r.motif,
+            'reponse_couturier': r.reponse_couturier,
+            'date_creation': r.date_creation,
+        }
+
+    def get_recours_possible(self, obj):
+        from django.utils import timezone
+        from datetime import timedelta
+        if obj.statut != 'LIVREE' or not obj.date_livraison:
+            return False
+        if hasattr(obj, 'recours'):
+            return False
+        return timezone.now() - obj.date_livraison <= timedelta(hours=72)
 
     def _livraison(self, obj):
         try:
@@ -304,7 +371,7 @@ class CommandeCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Commande
-        fields = ['modele', 'mesures_utilisees', 'code_promo_code', 'adresse_livraison']
+        fields = ['modele', 'mesures_utilisees', 'code_promo_code', 'adresse_livraison', 'mode_livraison']
 
     def validate_code_promo_code(self, value):
         if not value:
@@ -321,6 +388,8 @@ class CommandeCreateSerializer(serializers.ModelSerializer):
         adresse = validated_data.pop('adresse_livraison', '') or 'À définir'
         promo   = validated_data.pop('code_promo_code', None)
         validated_data['statut'] = 'EN_ATTENTE'
+        # Routage : la commande est destinée au couturier qui a publié le modèle
+        validated_data['couturier'] = validated_data['modele'].couturier
         if promo:
             validated_data['code_promo'] = promo
             validated_data['remise_appliquee'] = promo.calculer_remise(
@@ -330,7 +399,9 @@ class CommandeCreateSerializer(serializers.ModelSerializer):
             promo.save(update_fields=['nb_utilisations'])
         with transaction.atomic():
             commande = super().create(validated_data)
-            Livraison.objects.create(commande=commande, adresse_client=adresse)
+            # Livraison créée uniquement si le client a choisi la livraison par l'atelier
+            if commande.mode_livraison == 'LIVRAISON':
+                Livraison.objects.create(commande=commande, adresse_client=adresse)
         return commande
 
 
@@ -441,14 +512,15 @@ class DevisListSerializer(serializers.ModelSerializer):
     modele_nom   = serializers.CharField(source='modele.nom',   read_only=True)
     modele_image = serializers.ImageField(source='modele.image', read_only=True)
     modele_prix  = serializers.DecimalField(source='modele.prix', max_digits=10, decimal_places=2, read_only=True)
+    modele_delai = serializers.IntegerField(source='modele.delai', read_only=True)
     client_nom   = serializers.SerializerMethodField()
     commande_id  = serializers.IntegerField(source='commande.id_commande', read_only=True, default=None)
 
     class Meta:
         model  = Devis
         fields = [
-            'id_devis', 'modele_nom', 'modele_image', 'modele_prix',
-            'client_nom', 'statut', 'date_creation',
+            'id_devis', 'modele_nom', 'modele_image', 'modele_prix', 'modele_delai',
+            'client_nom', 'notes_client', 'statut', 'date_creation',
             'prix_propose', 'delai_propose', 'date_expiration', 'commande_id',
         ]
 
@@ -547,6 +619,16 @@ class ParametreAtelierSerializer(serializers.ModelSerializer):
     class Meta:
         model = ParametreAtelier
         fields = ['acompte_pourcentage']
+
+
+class RecoursSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Recours
+        fields = [
+            'id_recours', 'commande', 'motif', 'statut',
+            'reponse_couturier', 'date_creation', 'date_reponse',
+        ]
+        read_only_fields = ['statut', 'reponse_couturier', 'date_creation', 'date_reponse']
 
 
 class PasswordResetSerializer(serializers.Serializer):

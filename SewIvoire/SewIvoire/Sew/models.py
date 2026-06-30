@@ -11,6 +11,10 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 class Utilisateur(AbstractUser):
     """Extension du modèle User Django"""
     telephone = models.CharField(max_length=20, blank=True, null=True)
+    adresse = models.TextField(
+        blank=True, null=True,
+        help_text="Adresse de livraison par défaut du client"
+    )
     role = models.CharField(
         max_length=20,
         choices=[
@@ -50,7 +54,12 @@ class Categorie(models.Model):
 
 class Materiau(models.Model):
     id_materiau = models.AutoField(primary_key=True)
-    nom_materiau = models.CharField(max_length=100, unique=True)
+    couturier = models.ForeignKey(
+        'Utilisateur', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='materiaux', limit_choices_to={'role': 'COUTURIER'},
+        help_text="Couturier propriétaire de ce stock",
+    )
+    nom_materiau = models.CharField(max_length=100)
     quantite_stock = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     seuil_alerte = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     unite = models.CharField(
@@ -83,6 +92,11 @@ class Materiau(models.Model):
 
 class Modele(models.Model):
     id_modele = models.AutoField(primary_key=True)
+    couturier = models.ForeignKey(
+        'Utilisateur', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='modeles_publies', limit_choices_to={'role': 'COUTURIER'},
+        help_text="Couturier qui a publié ce modèle",
+    )
     nom = models.CharField(max_length=200)
     prix = models.DecimalField(max_digits=10, decimal_places=2)
     delai = models.IntegerField(help_text="Délai de confection en jours")
@@ -192,6 +206,10 @@ class Commande(models.Model):
         default='EN_ATTENTE'
     )
     date_commande = models.DateTimeField(auto_now_add=True)
+    date_livraison = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Date/heure de livraison effective — départ du délai de recours (72h)",
+    )
     utilisateur = models.ForeignKey(
         Utilisateur,
         on_delete=models.CASCADE,
@@ -225,6 +243,19 @@ class Commande(models.Model):
         related_name='commandes',
     )
     remise_appliquee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    mode_livraison = models.CharField(
+        max_length=20,
+        choices=[
+            ('LIVRAISON', 'Livraison à domicile'),
+            ('RETRAIT', 'Retrait sur place'),
+        ],
+        default='LIVRAISON',
+        help_text="Livraison par l'atelier, ou retrait par le client / son propre livreur",
+    )
+    archivee_client = models.BooleanField(
+        default=False,
+        help_text="Le client a archivé (masqué) cette commande terminée de son espace",
+    )
 
     class Meta:
         db_table = 'commande'
@@ -237,7 +268,7 @@ class Commande(models.Model):
 
     @property
     def total_paye(self):
-        return sum(p.montant for p in self.paiements.all())
+        return sum(p.montant for p in self.paiements.all() if p.statut == 'CONFIRME')
 
     @property
     def reste_a_payer(self):
@@ -308,6 +339,12 @@ class Paiement(models.Model):
             ('CARTE', 'Carte bancaire'),
         ],
         default='ESPECES'
+    )
+    statut = models.CharField(
+        max_length=20,
+        choices=[('EN_ATTENTE', 'En attente'), ('CONFIRME', 'Confirmé')],
+        default='CONFIRME',
+        help_text="Un paiement en espèces reste EN_ATTENTE jusqu'à confirmation par l'atelier",
     )
     date = models.DateTimeField(auto_now_add=True)
     reference = models.CharField(max_length=100, blank=True, null=True)
@@ -603,3 +640,31 @@ class ParametreAtelier(models.Model):
     def get_instance(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class Recours(models.Model):
+    """Réclamation d'un client sur une commande livrée qui ne correspond pas
+    au modèle initial. Valable 72h après la date de livraison."""
+    STATUT_CHOICES = [
+        ('OUVERT', 'Ouvert'),
+        ('ACCEPTE', 'Accepté'),
+        ('REFUSE', 'Refusé'),
+    ]
+    id_recours = models.AutoField(primary_key=True)
+    commande = models.OneToOneField(
+        'Commande', on_delete=models.CASCADE, related_name='recours',
+    )
+    motif = models.TextField(help_text="Ce qui ne correspond pas au modèle initial")
+    statut = models.CharField(max_length=20, choices=STATUT_CHOICES, default='OUVERT')
+    reponse_couturier = models.TextField(blank=True, null=True)
+    date_creation = models.DateTimeField(auto_now_add=True)
+    date_reponse = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'recours'
+        verbose_name = 'Recours'
+        verbose_name_plural = 'Recours'
+        ordering = ['-date_creation']
+
+    def __str__(self):
+        return f"Recours #{self.id_recours} — commande #{self.commande_id} ({self.statut})"

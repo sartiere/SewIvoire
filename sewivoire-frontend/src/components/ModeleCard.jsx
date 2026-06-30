@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Shirt, Clock } from 'lucide-react'
+import { Shirt, Clock, Scissors } from 'lucide-react'
 
 function ModeleCard({ modele }) {
   return (
@@ -33,6 +33,12 @@ function ModeleCard({ modele }) {
         <h3 className="font-titre text-lg font-semibold text-nuit mb-1 truncate">
           {modele.nom}
         </h3>
+
+        {modele.couturier_nom && (
+          <p className="text-gray-400 text-xs mb-2 flex items-center gap-1 truncate">
+            <Scissors className="w-3 h-3 flex-shrink-0" /> Par {modele.couturier_nom}
+          </p>
+        )}
 
         <div className="flex items-center justify-between mb-4">
           <span className="text-or font-bold text-xl">

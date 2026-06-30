@@ -1,6 +1,7 @@
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useState } from 'react'
+import NotificationBell from './NotificationBell'
 
 function Navbar() {
   const { user, logout } = useAuth()
@@ -35,21 +36,29 @@ function Navbar() {
                     Dashboard
                   </NavLink>
                 )}
-                <NavLink to="/mes-commandes" className={({ isActive }) => isActive ? 'text-or font-semibold' : 'text-gray-300 hover:text-or transition-colors duration-200'}>
-                  Mes commandes
-                </NavLink>
-                {user.role !== 'COUTURIER' && (
-                  <NavLink to="/mes-devis" className={({ isActive }) => isActive ? 'text-or font-semibold' : 'text-gray-300 hover:text-or transition-colors duration-200'}>
-                    Mes devis
+                {user.role === 'LIVREUR' && (
+                  <NavLink to="/mes-livraisons" className={({ isActive }) => isActive ? 'text-or font-semibold' : 'text-gray-300 hover:text-or transition-colors duration-200'}>
+                    Mes livraisons
                   </NavLink>
                 )}
-                <NavLink to="/mesures" className={({ isActive }) => isActive ? 'text-or font-semibold' : 'text-gray-300 hover:text-or transition-colors duration-200'}>
-                  Mes mesures
-                </NavLink>
+                {user.role === 'CLIENT' && (
+                  <>
+                    <NavLink to="/mes-commandes" className={({ isActive }) => isActive ? 'text-or font-semibold' : 'text-gray-300 hover:text-or transition-colors duration-200'}>
+                      Mes commandes
+                    </NavLink>
+                    <NavLink to="/mes-devis" className={({ isActive }) => isActive ? 'text-or font-semibold' : 'text-gray-300 hover:text-or transition-colors duration-200'}>
+                      Mes devis
+                    </NavLink>
+                    <NavLink to="/mesures" className={({ isActive }) => isActive ? 'text-or font-semibold' : 'text-gray-300 hover:text-or transition-colors duration-200'}>
+                      Mes mesures
+                    </NavLink>
+                  </>
+                )}
                 <NavLink to="/profil" className={({ isActive }) => isActive ? 'text-or font-semibold' : 'text-gray-300 hover:text-or transition-colors duration-200'}>
                   Mon profil
                 </NavLink>
                 <div className="flex items-center gap-3">
+                  <NotificationBell />
                   <span className="text-or font-medium">
                     {user.first_name || user.username}
                   </span>
@@ -107,11 +116,16 @@ function Navbar() {
                 {user.role === 'COUTURIER' && (
                   <NavLink to="/dashboard" className={({ isActive }) => isActive ? 'text-or font-semibold py-2' : 'text-gray-300 hover:text-or py-2'} onClick={() => setMenuOuvert(false)}>Dashboard</NavLink>
                 )}
-                <NavLink to="/mes-commandes" className={({ isActive }) => isActive ? 'text-or font-semibold py-2' : 'text-gray-300 hover:text-or py-2'} onClick={() => setMenuOuvert(false)}>Mes commandes</NavLink>
-                {user.role !== 'COUTURIER' && (
-                  <NavLink to="/mes-devis" className={({ isActive }) => isActive ? 'text-or font-semibold py-2' : 'text-gray-300 hover:text-or py-2'} onClick={() => setMenuOuvert(false)}>Mes devis</NavLink>
+                {user.role === 'LIVREUR' && (
+                  <NavLink to="/mes-livraisons" className={({ isActive }) => isActive ? 'text-or font-semibold py-2' : 'text-gray-300 hover:text-or py-2'} onClick={() => setMenuOuvert(false)}>Mes livraisons</NavLink>
                 )}
-                <NavLink to="/mesures" className={({ isActive }) => isActive ? 'text-or font-semibold py-2' : 'text-gray-300 hover:text-or py-2'} onClick={() => setMenuOuvert(false)}>Mes mesures</NavLink>
+                {user.role === 'CLIENT' && (
+                  <>
+                    <NavLink to="/mes-commandes" className={({ isActive }) => isActive ? 'text-or font-semibold py-2' : 'text-gray-300 hover:text-or py-2'} onClick={() => setMenuOuvert(false)}>Mes commandes</NavLink>
+                    <NavLink to="/mes-devis" className={({ isActive }) => isActive ? 'text-or font-semibold py-2' : 'text-gray-300 hover:text-or py-2'} onClick={() => setMenuOuvert(false)}>Mes devis</NavLink>
+                    <NavLink to="/mesures" className={({ isActive }) => isActive ? 'text-or font-semibold py-2' : 'text-gray-300 hover:text-or py-2'} onClick={() => setMenuOuvert(false)}>Mes mesures</NavLink>
+                  </>
+                )}
                 <button onClick={logout} className="text-left text-red-400 hover:text-red-300 py-2">Déconnexion</button>
               </>
             ) : (
